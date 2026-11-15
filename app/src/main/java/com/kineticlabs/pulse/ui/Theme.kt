@@ -17,6 +17,8 @@ val Red = Color(0xFFEF4444)
 val Blue = Color(0xFF3B82F6)
 val WheelieBg = Color(0xFF052E18)
 val WheelieTrack = Color(0xFF031C0E)
+val StoppieBg = Color(0xFF30081A)
+val StoppieTrack = Color(0xFF1C040E)
 
 @Composable
 fun KineticTheme(content: @Composable () -> Unit) {

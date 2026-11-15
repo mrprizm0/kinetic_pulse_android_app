@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kineticlabs.pulse.PulseViewModel
 import com.kineticlabs.pulse.data.WheelieRecord
+import com.kineticlabs.pulse.ble.TrickKind
 import com.kineticlabs.pulse.ble.landingScore
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -75,9 +76,14 @@ fun HistoryScreen(vm: PulseViewModel) {
             return@Column
         }
 
-        val best = history.maxOf { it.ms }
+        val wheelies = history.filter { it.isWheelie }
+        val best = wheelies.maxOfOrNull { it.ms } ?: 0L
+        val bestStoppie = history.filter { !it.isWheelie }.maxOfOrNull { it.ms } ?: -1L
+        val nStoppies = history.size - wheelies.size
         Text(
-            "${history.size} wheelies · best ${fmtSecs(best)} · total ${fmtSecs(history.sumOf { it.ms })}",
+            "${wheelies.size} wheelies · best ${fmtSecs(best)}" +
+                (if (nStoppies > 0) " · $nStoppies stoppies" else "") +
+                " · total ${fmtSecs(wheelies.sumOf { it.ms })}",
             color = Muted, fontSize = 13.sp,
         )
         Spacer(Modifier.height(14.dp))
@@ -87,7 +93,9 @@ fun HistoryScreen(vm: PulseViewModel) {
         Spacer(Modifier.height(16.dp))
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
-            items(history.asReversed(), key = { it.time }) { r -> HistoryRow(r, fmt.format(Date(r.time)), r.ms == best) }
+            items(history.asReversed(), key = { it.time }) { r ->
+                HistoryRow(r, fmt.format(Date(r.time)), if (r.isWheelie) r.ms == best else r.ms == bestStoppie)
+            }
             item { Spacer(Modifier.height(12.dp)) }
         }
     }
@@ -117,7 +125,12 @@ private fun DurationChart(items: List<WheelieRecord>, allBest: Long) {
         items.forEachIndexed { i, r ->
             val h = size.height * (r.ms.toFloat() / max).coerceAtLeast(0.03f)
             drawRoundRect(
-                color = if (r.ms == allBest) Gold else Orange,
+                color = when {
+                    r.kind == TrickKind.STOPPIE -> Red
+                    r.ms == allBest -> Gold
+                    r.kind == TrickKind.CIRCLE -> Blue
+                    else -> Orange
+                },
                 topLeft = Offset(i * slot + (slot - w) / 2, size.height - h),
                 size = Size(w, h),
                 cornerRadius = CornerRadius(w / 3, w / 3),
@@ -127,15 +140,32 @@ private fun DurationChart(items: List<WheelieRecord>, allBest: Long) {
 }
 
 @Composable
+private fun TrickChip(label: String, color: androidx.compose.ui.graphics.Color) {
+    Text(
+        label, color = androidx.compose.ui.graphics.Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(end = 6.dp).clip(RoundedCornerShape(5.dp)).background(color)
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
+}
+
+@Composable
 private fun HistoryRow(r: WheelieRecord, date: String, isBest: Boolean) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardBg).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(date, color = Muted, fontSize = 12.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when (r.kind) {
+                    TrickKind.STOPPIE -> TrickChip("STOPPIE", Red)
+                    TrickKind.CIRCLE -> TrickChip(String.format("CIRCLE %.1fx", kotlin.math.abs(r.turns)), Gold)
+                    else -> {}
+                }
+                Text(date, color = Muted, fontSize = 12.sp)
+            }
             Text(
-                "peak ${r.peak.roundToInt()}° · bal ${r.balance} · pop ${r.pop} · land ${landingScore(r.landingG)}",
+                if (r.kind == TrickKind.STOPPIE) "depth ${r.peak.roundToInt()}° · bal ${r.balance}"
+                else "peak ${r.peak.roundToInt()}° · bal ${r.balance} · pop ${r.pop} · land ${landingScore(r.landingG)}",
                 color = Muted, fontSize = 12.sp,
             )
         }

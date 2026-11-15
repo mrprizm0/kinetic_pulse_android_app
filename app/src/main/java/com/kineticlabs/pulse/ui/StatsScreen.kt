@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kineticlabs.pulse.PulseViewModel
+import com.kineticlabs.pulse.ble.TrickKind
 import com.kineticlabs.pulse.data.Badge
 import com.kineticlabs.pulse.data.computeBadges
 import kotlin.math.roundToInt
@@ -91,6 +92,27 @@ fun StatsScreen(vm: PulseViewModel) {
             if (allTime) "All-time stats are stored on the Pulse itself."
             else "This ride = since the Pulse was turned on (or reset).",
             color = Muted, fontSize = 12.sp,
+        )
+
+        // ---- tricks (from wheelies saved on this phone, plus demo ones)
+        val all = history + demoRecs
+        val stoppies = all.filter { it.kind == TrickKind.STOPPIE }
+        val circles = all.filter { it.kind == TrickKind.CIRCLE }
+        Spacer(Modifier.height(24.dp))
+        SectionLabel("Tricks")
+        Spacer(Modifier.height(10.dp))
+        TileGrid(
+            listOf(
+                Tile("Stoppies", "${stoppies.size}", if (stoppies.isNotEmpty()) Red else TextMain),
+                Tile("Best stoppie", stoppies.maxOfOrNull { it.ms }?.let { fmtSecs(it) } ?: DASH),
+                Tile("Deepest", stoppies.maxOfOrNull { it.peak }?.let { "${it.roundToInt()}°" } ?: DASH),
+                Tile("Stoppie time", if (stoppies.isEmpty()) DASH else fmtSecs(stoppies.sumOf { it.ms })),
+                Tile("Wheelie circles", "${circles.size}", if (circles.isNotEmpty()) Gold else TextMain),
+                Tile(
+                    "Most turns",
+                    circles.maxOfOrNull { kotlin.math.abs(it.turns) }?.let { String.format("%.1fx", it) } ?: DASH,
+                ),
+            ),
         )
 
         Spacer(Modifier.height(24.dp))

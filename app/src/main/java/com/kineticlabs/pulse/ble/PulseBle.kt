@@ -81,6 +81,8 @@ class PulseBle(context: Context) {
     val allTimeExtra: StateFlow<StatsExtraPacket?> = _allTimeExtra
     private val _wheelies = MutableSharedFlow<WheelieEvent>(extraBufferCapacity = 16)
     val wheelies: SharedFlow<WheelieEvent> = _wheelies
+    private val _tricks = MutableSharedFlow<TrickPacket>(extraBufferCapacity = 16)
+    val tricks: SharedFlow<TrickPacket> = _tricks
 
     val isDemo: Boolean get() = _status.value == Status.DEMO
     val isConnected: Boolean get() = _status.value == Status.CONNECTED || isDemo
@@ -248,7 +250,7 @@ class PulseBle(context: Context) {
 
         val notify = listOf(
             PulseUuid.LIVE, PulseUuid.WHEELIE, PulseUuid.RIDE, PulseUuid.ALL_TIME,
-            PulseUuid.RIDE_EXTRA, PulseUuid.ALL_TIME_EXTRA,
+            PulseUuid.RIDE_EXTRA, PulseUuid.ALL_TIME_EXTRA, PulseUuid.TRICK,
         )
         for (u in notify) {
             val c = s.getCharacteristic(u) ?: continue
@@ -275,6 +277,7 @@ class PulseBle(context: Context) {
             PulseUuid.ALL_TIME -> StatsPacket.parse(v)?.let { _allTime.value = it }
             PulseUuid.RIDE_EXTRA -> StatsExtraPacket.parse(v)?.let { _rideExtra.value = it }
             PulseUuid.ALL_TIME_EXTRA -> StatsExtraPacket.parse(v)?.let { _allTimeExtra.value = it }
+            PulseUuid.TRICK -> TrickPacket.parse(v)?.let { _tricks.tryEmit(it) }
         }
     }
 
@@ -398,9 +401,13 @@ class PulseBle(context: Context) {
         _allTimeExtra.value = demoAll.extra()
     }
 
-    private fun demoLive(pitch: Float, inWheelie: Boolean, ms: Long) {
-        _live.value = LivePacket(pitch, inWheelie, calibrated = true, wheelieMs = ms, battery = 87)
+    private fun demoLive(pitch: Float, inWheelie: Boolean, ms: Long, inStoppie: Boolean = false) {
+        _live.value = LivePacket(
+            pitch, inWheelie, calibrated = true, wheelieMs = ms, battery = 87, inStoppie = inStoppie,
+        )
     }
+
+    private var demoBestStoppieMs = 0L
 
     private suspend fun runDemo() {
         var t = 0f
@@ -411,6 +418,32 @@ class PulseBle(context: Context) {
                 demoLive(sin(t * 3f) * 1.5f + Random.nextFloat() - 0.5f, false, 0)
                 delay(100); t += 0.1f
             }
+
+            // sometimes a stoppie instead of a wheelie
+            if (Random.nextFloat() < 0.3f) {
+                val dur = 0.5f + Random.nextFloat() * 1.8f
+                val target = 10f + Random.nextFloat() * 12f
+                var w = 0f; var peak = 0f; var sum = 0f; var sumSq = 0f; var n = 0
+                while (w < dur) {
+                    val shape = min(min(1f, w / 0.25f), min(1f, (dur - w) / 0.25f))
+                    val a = target * shape + (Random.nextFloat() - 0.5f) * 2f
+                    peak = max(peak, a); sum += a; sumSq += a * a; n++
+                    demoLive(-a, false, if (w > 0.3f) (w * 1000).toLong() else 0, inStoppie = w > 0.3f)
+                    delay(100); w += 0.1f; t += 0.1f
+                }
+                val avg = sum / n
+                val sd = sqrt(max(0f, sumSq / n - avg * avg))
+                val ms = (dur * 1000).toLong()
+                _tricks.tryEmit(
+                    TrickPacket(
+                        TrickKind.STOPPIE, ms, peak, 0f,
+                        (100f - (sd - 1f) * 12f).coerceIn(0f, 100f).toInt(), ms > demoBestStoppieMs,
+                    )
+                )
+                demoBestStoppieMs = max(demoBestStoppieMs, ms)
+                continue
+            }
+
             // a wheelie
             val dur = 1.5f + Random.nextFloat() * 7f
             val target = 20f + Random.nextFloat() * 14f
@@ -437,6 +470,13 @@ class PulseBle(context: Context) {
                 landingG = 1.2f + Random.nextFloat() * 1.8f,
             )
             _wheelies.tryEmit(WheelieEvent(packet, demoAll.bestMs))
+            // the real Pulse follows a circle's WHEELIE message with a TRICK message
+            if (Random.nextFloat() < 0.25f) {
+                val turns = (1f + Random.nextFloat() * 1.2f) * (if (Random.nextBoolean()) 1f else -1f)
+                _tricks.tryEmit(
+                    TrickPacket(TrickKind.CIRCLE, packet.ms, packet.peak, turns, packet.balance, packet.newBest)
+                )
+            }
             demoRide.add(packet)
             demoAll.add(packet)
             publishDemoStats()

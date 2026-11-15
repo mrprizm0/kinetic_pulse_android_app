@@ -11,6 +11,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kineticlabs.pulse.ble.LivePacket
 import com.kineticlabs.pulse.ble.PulseBle
+import com.kineticlabs.pulse.ble.TrickKind
+import com.kineticlabs.pulse.ble.TrickPacket
 import com.kineticlabs.pulse.ble.WheelieEvent
 import com.kineticlabs.pulse.crew.CrewSim
 import com.kineticlabs.pulse.data.HistoryStore
@@ -79,6 +81,7 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
             if (ttsReady) tts?.language = Locale.getDefault()
         }
         viewModelScope.launch { ble.wheelies.collect { onWheelie(it) } }
+        viewModelScope.launch { ble.tricks.collect { onTrick(it) } }
         viewModelScope.launch { ble.live.collect { onLive(it) } }
     }
 
@@ -97,6 +100,12 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onLive(l: LivePacket?) {
         if (l == null) return
+        if (l.inStoppie) {  // stoppies: just count the seconds
+            val sec = l.wheelieMs / 1000
+            if (!wasInWheelie) { wasInWheelie = true; lastSecondSaid = 0 }
+            if (sec >= 1 && sec > lastSecondSaid) { lastSecondSaid = sec; say(sec.toString()) }
+            return
+        }
         if (!l.inWheelie) {
             wasInWheelie = false
             return
@@ -140,18 +149,72 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
             _history.value = _history.value + rec
         }
         session += rec
-        _summary.value = Summary(
-            rec = rec,
-            prevBestMs = e.prevBestMs,
-            number = session.size,
-            rank = 1 + session.count { it.ms > rec.ms },
-            sessionTotalMs = session.sumOf { it.ms },
-            shownAt = System.currentTimeMillis(),
-        )
+        showSummary(rec, e.prevBestMs)
         crew.addYourWheelie(rec.ms / 1000f, rec.peak.toInt())
         vibrate(short = false, best = e.packet.newBest)
         val secs = String.format(Locale.US, "%.1f", rec.ms / 1000f)
         say(if (e.packet.newBest) "New best! $secs seconds" else "$secs seconds")
+    }
+
+    /** Summary for a record, compared against others of the same kind this session. */
+    private fun showSummary(rec: WheelieRecord, prevBestMs: Long) {
+        val same = session.filter { it.isWheelie == rec.isWheelie }
+        _summary.value = Summary(
+            rec = rec,
+            prevBestMs = prevBestMs,
+            number = same.size,
+            rank = 1 + same.count { it.ms > rec.ms },
+            sessionTotalMs = same.sumOf { it.ms },
+            shownAt = System.currentTimeMillis(),
+        )
+    }
+
+    /** All tricks seen (saved + demo), for best-of comparisons. */
+    private fun allRecords() = _history.value + _demoRecords.value
+
+    private fun onTrick(t: TrickPacket) {
+        when (t.kind) {
+            TrickKind.STOPPIE -> {
+                val prevBest = allRecords().filter { it.kind == TrickKind.STOPPIE }.maxOfOrNull { it.ms } ?: 0L
+                val rec = WheelieRecord.fromStoppie(t).copy(newBest = t.ms > prevBest)
+                if (ble.isDemo) {
+                    _demoRecords.value = _demoRecords.value + rec
+                } else {
+                    store.append(rec)
+                    _history.value = _history.value + rec
+                }
+                session += rec
+                showSummary(rec, prevBest)
+                val secs = String.format(Locale.US, "%.1f", t.ms / 1000f)
+                crew.addYourEvent("You held a ${secs}s stoppie · ${t.peak.toInt()}°")
+                vibrate(short = false, best = rec.newBest)
+                say(if (rec.newBest) "Best stoppie! $secs seconds" else "Stoppie, $secs seconds")
+            }
+            TrickKind.CIRCLE -> {
+                // The wheelie itself already arrived; mark it as a circle.
+                fun upgrade(list: List<WheelieRecord>): List<WheelieRecord>? {
+                    val i = list.indexOfLast { it.isWheelie && kotlin.math.abs(it.ms - t.ms) <= 50 }
+                    if (i < 0) return null
+                    return list.toMutableList().also { it[i] = it[i].copy(kind = TrickKind.CIRCLE, turns = t.turns) }
+                }
+                if (ble.isDemo) {
+                    upgrade(_demoRecords.value)?.let { _demoRecords.value = it }
+                } else {
+                    upgrade(_history.value)?.let { _history.value = it; store.saveAll(it) }
+                }
+                upgrade(session)?.let { session.clear(); session.addAll(it) }
+                _summary.value?.let { s ->
+                    if (kotlin.math.abs(s.rec.ms - t.ms) <= 50 && s.rec.isWheelie) {
+                        _summary.value = s.copy(rec = s.rec.copy(kind = TrickKind.CIRCLE, turns = t.turns))
+                    }
+                }
+                val turns = String.format(Locale.US, "%.1f", kotlin.math.abs(t.turns))
+                crew.addYourEvent("You spun a ${turns}x wheelie circle")
+                vibrate(short = false, best = true)
+                say("Wheelie circle! $turns turns")
+            }
+            TrickKind.WHEELIE -> {}  // already handled by the WHEELIE message
+        }
     }
 
     fun dismissSummary(shownAt: Long? = null) {
@@ -167,11 +230,13 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
     /** All wheelies as CSV text, for sharing. */
     fun historyCsv(): String {
         val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-        val sb = StringBuilder("time,duration_s,peak_deg,avg_deg,balance,pop_dps,landing_g,new_best\n")
+        val sb = StringBuilder("time,trick,duration_s,peak_deg,avg_deg,balance,pop_dps,landing_g,turns,new_best\n")
         _history.value.forEach { r ->
             sb.append(fmt.format(java.util.Date(r.time))).append(',')
-                .append(String.format(Locale.US, "%.1f,%.1f,%.1f,%d,%d,%.2f,%d\n",
-                    r.ms / 1000f, r.peak, r.avg, r.balance, r.pop, r.landingG, if (r.newBest) 1 else 0))
+                .append(r.kind.name.lowercase()).append(',')
+                .append(String.format(Locale.US, "%.1f,%.1f,%.1f,%d,%d,%.2f,%.2f,%d\n",
+                    r.ms / 1000f, r.peak, r.avg, r.balance, r.pop, r.landingG, r.turns,
+                    if (r.newBest) 1 else 0))
         }
         return sb.toString()
     }

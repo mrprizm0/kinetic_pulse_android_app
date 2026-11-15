@@ -18,6 +18,7 @@ object PulseUuid {
     val COMMAND: UUID = make(6)
     val RIDE_EXTRA: UUID = make(7)
     val ALL_TIME_EXTRA: UUID = make(8)
+    val TRICK: UUID = make(9)
 
     /** Standard "turn notifications on" descriptor. */
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -37,8 +38,9 @@ data class LivePacket(
     val pitch: Float,
     val inWheelie: Boolean,
     val calibrated: Boolean,
-    val wheelieMs: Long,
+    val wheelieMs: Long,     // current wheelie OR stoppie time
     val battery: Int?,
+    val inStoppie: Boolean = false,
 ) {
     companion object {
         fun parse(b: ByteArray): LivePacket? {
@@ -52,6 +54,40 @@ data class LivePacket(
                 calibrated = (flags and 2) != 0,
                 wheelieMs = u32(bb, 3),
                 battery = if (bat == 255) null else bat,
+                inStoppie = (flags and 4) != 0,
+            )
+        }
+    }
+}
+
+enum class TrickKind(val code: Int) {
+    WHEELIE(0), STOPPIE(1), CIRCLE(2);
+
+    companion object {
+        fun of(code: Int) = entries.firstOrNull { it.code == code } ?: WHEELIE
+    }
+}
+
+/** 0009 TRICK, sent after every wheelie, stoppie or wheelie circle (firmware V1.5+). */
+data class TrickPacket(
+    val kind: TrickKind,
+    val ms: Long,
+    val peak: Float,      // stoppie: how far the nose dipped
+    val turns: Float,     // circles: + = left
+    val balance: Int,
+    val newBest: Boolean,
+) {
+    companion object {
+        fun parse(b: ByteArray): TrickPacket? {
+            if (b.size < 10) return null
+            val bb = le(b)
+            return TrickPacket(
+                kind = TrickKind.of(u8(b, 0)),
+                ms = u32(bb, 1),
+                peak = bb.getShort(5) / 10f,
+                turns = bb.getShort(7) / 100f,
+                balance = u8(b, 9),
+                newBest = b.size > 10 && u8(b, 10) == 1,
             )
         }
     }

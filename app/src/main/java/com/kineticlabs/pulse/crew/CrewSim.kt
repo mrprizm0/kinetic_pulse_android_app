@@ -134,6 +134,9 @@ class CrewSim {
         addFeed("You popped a $label wheelie", Orange)
     }
 
+    /** Any other event of yours (stoppies, circles) for the crew feed. */
+    fun addYourEvent(text: String) = addFeed(text, Orange)
+
     fun step(dt: Float) {
         time += dt
         val t = time

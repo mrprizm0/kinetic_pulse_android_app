@@ -147,7 +147,7 @@ fun DeviceScreen(vm: PulseViewModel) {
         WideButton("Reconnect", enabled = !demo) { vm.ble.reconnect() }
 
         Spacer(Modifier.height(24.dp))
-        Text("Kinetic Pulse for Android 1.1 · needs Pulse firmware V1.3+", color = Muted, fontSize = 12.sp)
+        Text("Kinetic Pulse for Android 1.2 · stoppies & circles need Pulse firmware V1.5+", color = Muted, fontSize = 12.sp)
     }
 
     if (confirmResetAll) {

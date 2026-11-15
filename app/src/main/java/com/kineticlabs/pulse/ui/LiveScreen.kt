@@ -35,7 +35,9 @@ import com.kineticlabs.pulse.Summary
 import com.kineticlabs.pulse.ble.LivePacket
 import com.kineticlabs.pulse.ble.PulseBle
 import com.kineticlabs.pulse.ble.StatsPacket
+import com.kineticlabs.pulse.ble.TrickKind
 import com.kineticlabs.pulse.ble.landingScore
+import androidx.compose.runtime.remember
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -50,6 +52,11 @@ fun LiveScreen(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBlu
     val all by vm.ble.allTime.collectAsState()
     val summary by vm.summary.collectAsState()
     val goal by vm.goalSec.collectAsState()
+    val history by vm.history.collectAsState()
+    val demoRecs by vm.demoRecords.collectAsState()
+    val bestStoppieMs = remember(history, demoRecs) {
+        (history + demoRecs).filter { it.kind == TrickKind.STOPPIE }.maxOfOrNull { it.ms } ?: 0L
+    }
 
     val connected = status == PulseBle.Status.CONNECTED || status == PulseBle.Status.DEMO
     val l = live
@@ -58,11 +65,12 @@ fun LiveScreen(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBlu
         when {
             !connected -> ConnectPanel(status, onRequestPermissions, onEnableBluetooth) { vm.ble.setDemo(true) }
             l != null && l.inWheelie -> WheelieTakeover(l, all?.longestMs ?: 0, goal)
+            l != null && l.inStoppie -> StoppieTakeover(l, bestStoppieMs)
             else -> IdleLive(l, ride, all, status == PulseBle.Status.DEMO, goal)
         }
 
         val s = summary
-        if (s != null && l?.inWheelie != true) {
+        if (s != null && l?.inWheelie != true && l?.inStoppie != true) {
             SummaryOverlay(s) { vm.dismissSummary() }
             LaunchedEffect(s.shownAt) {
                 delay(SUMMARY_MS)
@@ -217,11 +225,44 @@ private fun WheelieTakeover(live: LivePacket, bestMs: Long, goalSec: Int) {
     }
 }
 
-/** After a wheelie: every stat for that run. Tap to close. */
+/** During a stoppie: the nose-down angle is huge, time along the bottom. */
+@Composable
+private fun StoppieTakeover(live: LivePacket, bestMs: Long) {
+    val ms = live.wheelieMs
+    val record = bestMs == 0L || ms > bestMs
+    Column(
+        Modifier.fillMaxSize().background(StoppieBg).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            if (bestMs > 0 && record) "NEW RECORD!" else "STOPPIE!",
+            color = if (bestMs > 0 && record) Gold else TextMain,
+            fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp,
+        )
+        Spacer(Modifier.weight(1f))
+        Text("${(-live.pitch).roundToInt()}°", fontSize = 150.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Text(fmtSecs(ms), fontSize = 44.sp, fontWeight = FontWeight.Bold, color = if (record) Gold else TextMain)
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (bestMs > 0) "BEST ${fmtSecs(bestMs)}" else "FIRST ONE!",
+                color = if (record) Gold else Muted, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Bar(if (bestMs > 0) ms.toFloat() / bestMs else 1f, if (record) Gold else Red, StoppieTrack, height = 12)
+    }
+}
+
+/** After a trick: every stat for that run. Tap to close. */
 @Composable
 private fun SummaryOverlay(s: Summary, onDismiss: () -> Unit) {
     val r = s.rec
     val best = r.newBest
+    val stoppie = r.kind == TrickKind.STOPPIE
+    val circle = r.kind == TrickKind.CIRCLE
     val vsBest = when {
         best && s.prevBestMs > 0 -> "+" + fmtSecs(r.ms - s.prevBestMs)
         best -> "1ST!"
@@ -229,6 +270,38 @@ private fun SummaryOverlay(s: Summary, onDismiss: () -> Unit) {
         else -> DASH
     }
     val land = landingScore(r.landingG)
+    val turnsText = String.format("%.1fx %s", kotlin.math.abs(r.turns), if (r.turns > 0) "L" else "R")
+
+    val title = when {
+        stoppie && best -> "BEST STOPPIE!"
+        stoppie -> "STOPPIE #${s.number}"
+        circle -> String.format("WHEELIE CIRCLE %.1fx", kotlin.math.abs(r.turns))
+        best -> "NEW BEST!"
+        else -> "WHEELIE #${s.number}"
+    }
+    val titleColor = when {
+        best || circle -> Gold
+        stoppie -> Red
+        else -> Orange
+    }
+    val tiles = if (stoppie) listOf(
+        Tile("Time", fmtSecs(r.ms), if (best) Gold else TextMain),
+        Tile("Depth", "${r.peak.roundToInt()}°"),
+        Tile("Balance", "${r.balance}", scoreColor(r.balance)),
+        Tile("Vs best", vsBest, if (best) Gold else Red),
+        Tile("Rank", "#${s.rank}", if (s.rank == 1) Gold else TextMain),
+        Tile("Session", fmtSecs(s.sessionTotalMs)),
+    ) else listOf(
+        Tile("Time", fmtSecs(r.ms), if (best) Gold else TextMain),
+        Tile("Peak", "${r.peak.roundToInt()}°"),
+        Tile("Average", "${r.avg.roundToInt()}°"),
+        Tile("Balance", "${r.balance}", scoreColor(r.balance)),
+        Tile("Pop", "${r.pop}", sub = "°/s"),
+        Tile("Landing", "$land", scoreColor(land), String.format("%.1fg", r.landingG)),
+        Tile("Vs best", vsBest, if (best) Gold else Orange),
+        if (circle) Tile("Turns", turnsText, Gold) else Tile("Rank", "#${s.rank}", if (s.rank == 1) Gold else TextMain),
+        Tile("Session", fmtSecs(s.sessionTotalMs)),
+    )
 
     Box(
         Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)).clickable(onClick = onDismiss),
@@ -242,25 +315,11 @@ private fun SummaryOverlay(s: Summary, onDismiss: () -> Unit) {
                 .padding(16.dp)
         ) {
             Text(
-                if (best) "NEW BEST!" else "WHEELIE #${s.number}",
-                color = if (best) Gold else Orange, fontSize = 24.sp, fontWeight = FontWeight.Black,
+                title, color = titleColor, fontSize = 24.sp, fontWeight = FontWeight.Black,
                 letterSpacing = 2.sp,
             )
             Spacer(Modifier.height(14.dp))
-            TileGrid(
-                columns = 3,
-                tiles = listOf(
-                    Tile("Time", fmtSecs(r.ms), if (best) Gold else TextMain),
-                    Tile("Peak", "${r.peak.roundToInt()}°"),
-                    Tile("Average", "${r.avg.roundToInt()}°"),
-                    Tile("Balance", "${r.balance}", scoreColor(r.balance)),
-                    Tile("Pop", "${r.pop}", sub = "°/s"),
-                    Tile("Landing", "$land", scoreColor(land), String.format("%.1fg", r.landingG)),
-                    Tile("Vs best", vsBest, if (best) Gold else Orange),
-                    Tile("Rank", "#${s.rank}", if (s.rank == 1) Gold else TextMain),
-                    Tile("Session", fmtSecs(s.sessionTotalMs)),
-                ),
-            )
+            TileGrid(columns = 3, tiles = tiles)
             Spacer(Modifier.height(12.dp))
             Text("Tap to close", color = Muted, fontSize = 12.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         }

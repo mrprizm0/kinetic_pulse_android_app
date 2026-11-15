@@ -1,5 +1,6 @@
 package com.kineticlabs.pulse.data
 
+import com.kineticlabs.pulse.ble.TrickKind
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -14,7 +15,12 @@ data class Badge(
 )
 
 /** Achievements, worked out from every wheelie the app has seen. */
-fun computeBadges(recs: List<WheelieRecord>): List<Badge> {
+fun computeBadges(all: List<WheelieRecord>): List<Badge> {
+    val recs = all.filter { it.isWheelie }  // wheelie badges ignore stoppies
+    val stoppies = all.filter { it.kind == TrickKind.STOPPIE }
+    val circles = all.filter { it.kind == TrickKind.CIRCLE }
+    val bestStoppie = (stoppies.maxOfOrNull { it.ms } ?: 0L) / 1000f
+    val mostTurns = circles.maxOfOrNull { kotlin.math.abs(it.turns) } ?: 0f
     val n = recs.size
     val longest = (recs.maxOfOrNull { it.ms } ?: 0L) / 1000f
     val peak = recs.maxOfOrNull { it.peak } ?: 0f
@@ -48,5 +54,9 @@ fun computeBadges(recs: List<WheelieRecord>): List<Badge> {
         b("Grinder", "25 wheelies in one day", "25", bestDay.toFloat(), 25f, "$bestDay/25"),
         b("Century", "100 wheelies total", "100", n.toFloat(), 100f, "$n/100"),
         b("Air Time", "5 minutes total wheelie time", "5m", totalMin, 5f, "${s(totalMin)}/5m"),
+        b("Nose Dive", "Your first stoppie", "ST", stoppies.size.toFloat(), 1f, "${stoppies.size}/1"),
+        b("Hang Time", "Hold a 2 second stoppie", "2s", bestStoppie, 2f, "${s(bestStoppie)}/2s"),
+        b("Full Circle", "Spin a wheelie circle", "O", circles.size.toFloat(), 1f, "${circles.size}/1"),
+        b("Spin Cycle", "Two full turns on the back wheel", "2x", mostTurns, 2f, "${s(mostTurns)}/2x"),
     )
 }
