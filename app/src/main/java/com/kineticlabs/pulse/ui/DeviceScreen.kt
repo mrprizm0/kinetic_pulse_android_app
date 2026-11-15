@@ -55,99 +55,69 @@ fun DeviceScreen(vm: PulseViewModel) {
     var confirmResetAll by remember { mutableStateOf(false) }
     var showCalHelp by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
-        Text("Device", fontSize = 28.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(16.dp))
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 20.dp)) {
+        ScreenTitle("Device")
+        Spacer(Modifier.height(28.dp))
 
-        // status card
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardBg).padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(12.dp).clip(CircleShape).background(if (connected) (if (demo) Gold else Blue) else Muted))
-            Spacer(Modifier.size(12.dp))
+        // status: name, state, and battery as a big thin number
+        Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
-                Text(name ?: "Kinetic Pulse", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                Text(
-                    when (status) {
-                        PulseBle.Status.CONNECTED -> "Connected"
-                        PulseBle.Status.DEMO -> "Demo mode (fake data)"
-                        PulseBle.Status.CONNECTING -> "Connecting…"
-                        PulseBle.Status.SCANNING -> "Searching…"
-                        PulseBle.Status.BLUETOOTH_OFF -> "Bluetooth is off"
-                        PulseBle.Status.NO_PERMISSION -> "Bluetooth permission needed"
-                    },
-                    color = Muted, fontSize = 13.sp,
-                )
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                live?.battery?.let { Text("$it%", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
-                live?.let {
+                Text(name ?: "Kinetic Pulse", fontSize = 20.sp, fontWeight = FontWeight.Light)
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(if (connected) (if (demo) Gold else Go) else Faint))
+                    Spacer(Modifier.size(8.dp))
                     Text(
-                        if (it.calibrated) "Calibrated" else "Not calibrated",
-                        color = if (it.calibrated) Go else Gold, fontSize = 12.sp,
+                        when (status) {
+                            PulseBle.Status.CONNECTED -> if (live?.calibrated == false) "CONNECTED · NOT CALIBRATED" else "CONNECTED"
+                            PulseBle.Status.DEMO -> "DEMO MODE"
+                            PulseBle.Status.CONNECTING -> "CONNECTING"
+                            PulseBle.Status.SCANNING -> "SEARCHING"
+                            PulseBle.Status.BLUETOOTH_OFF -> "BLUETOOTH OFF"
+                            PulseBle.Status.NO_PERMISSION -> "NEEDS PERMISSION"
+                        },
+                        style = LabelStyle,
                     )
                 }
             }
+            live?.battery?.let {
+                Text("$it", style = numberStyle(44.sp))
+                Text("%", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(bottom = 8.dp, start = 2.dp))
+            }
         }
 
-        Spacer(Modifier.height(22.dp))
-        SectionLabel("Pulse controls")
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            WideButton("Calibrate", enabled = connected && !demo, primary = true) {
-                vm.ble.send(PulseCommand.CALIBRATE); showCalHelp = true
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(
-                    onClick = { vm.ble.send(PulseCommand.SOUND_ON) }, enabled = connected && !demo,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Sound on", color = TextMain) }
-                OutlinedButton(
-                    onClick = { vm.ble.send(PulseCommand.SOUND_OFF) }, enabled = connected && !demo,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Sound off", color = TextMain) }
-            }
-            WideButton("Reset ride stats", enabled = connected) { vm.ble.send(PulseCommand.RESET_RIDE) }
-            WideButton("Reset all-time stats", enabled = connected, danger = true) { confirmResetAll = true }
+        Spacer(Modifier.height(32.dp))
+        SectionLabel("Pulse")
+        ActionRow("Calibrate", enabled = connected && !demo, accent = true) {
+            vm.ble.send(PulseCommand.CALIBRATE); showCalHelp = true
         }
+        ActionRow("Sound on", enabled = connected && !demo) { vm.ble.send(PulseCommand.SOUND_ON) }
+        ActionRow("Sound off", enabled = connected && !demo) { vm.ble.send(PulseCommand.SOUND_OFF) }
+        ActionRow("Reset ride stats", enabled = connected) { vm.ble.send(PulseCommand.RESET_RIDE) }
+        ActionRow("Reset all-time stats", enabled = connected, danger = true) { confirmResetAll = true }
 
-        Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(32.dp))
         SectionLabel("App")
-        Spacer(Modifier.height(8.dp))
-        ToggleRow("Keep screen on", "Handy when the phone is mounted on the bike", keepOn) {
-            vm.setKeepScreenOn(it)
-        }
-        Spacer(Modifier.height(8.dp))
-        ToggleRow("Voice callouts", "Counts seconds out loud and calls goals and records", voiceOn) {
-            vm.setVoice(it)
-        }
-        Spacer(Modifier.height(8.dp))
+        ToggleRow("Keep screen on", "For when the phone is mounted", keepOn) { vm.setKeepScreenOn(it) }
+        ToggleRow("Voice callouts", "Seconds, goals and records out loud", voiceOn) { vm.setVoice(it) }
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardBg)
-                .clickable { vm.cycleGoal() }.padding(horizontal = 16.dp, vertical = 14.dp),
+            Modifier.fillMaxWidth().rowDivider().clickable { vm.cycleGoal() }.padding(vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Wheelie goal", fontWeight = FontWeight.SemiBold)
-                Text("Tap to change. Buzzes and calls out when you hit it", color = Muted, fontSize = 12.sp)
+                Text("Wheelie goal", fontSize = 16.sp, fontWeight = FontWeight.Light)
+                Text("Tap to change", color = Muted, fontSize = 12.sp)
             }
             Text(
-                if (goal == 0) "Off" else "${goal}s",
-                color = Color.Black, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clip(RoundedCornerShape(50)).background(if (goal == 0) Line else Orange)
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                if (goal == 0) "OFF" else "${goal}s",
+                style = numberStyle(22.sp, FontWeight.Light), color = if (goal == 0) Muted else Orange,
             )
         }
-        Spacer(Modifier.height(8.dp))
-        ToggleRow("Demo mode", "Fake wheelies, to try the app without a Pulse", demo) {
-            vm.ble.setDemo(it)
-        }
-        Spacer(Modifier.height(10.dp))
-        WideButton("Reconnect", enabled = !demo) { vm.ble.reconnect() }
+        ToggleRow("Demo mode", "Fake tricks, no Pulse needed", demo) { vm.ble.setDemo(it) }
+        ActionRow("Reconnect", enabled = !demo) { vm.ble.reconnect() }
 
-        Spacer(Modifier.height(24.dp))
-        Text("Kinetic Pulse for Android 1.2 · stoppies & circles need Pulse firmware V1.5+", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(32.dp))
+        Text("KINETIC PULSE 1.3 · TRICKS NEED FIRMWARE V1.5+", style = LabelStyle.copy(color = Faint, fontSize = 9.sp))
     }
 
     if (confirmResetAll) {
@@ -180,39 +150,46 @@ fun DeviceScreen(vm: PulseViewModel) {
     }
 }
 
+/** A tappable list row with a thin arrow. */
 @Composable
-private fun WideButton(
+private fun ActionRow(
     text: String,
     enabled: Boolean,
-    primary: Boolean = false,
+    accent: Boolean = false,
     danger: Boolean = false,
     onClick: () -> Unit,
 ) {
-    if (primary) {
-        Button(
-            onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Orange, contentColor = Color.Black),
-        ) { Text(text, fontWeight = FontWeight.SemiBold) }
-    } else {
-        OutlinedButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-            Text(text, color = if (danger) Red else TextMain)
-        }
+    val color = when {
+        !enabled -> Faint
+        danger -> Red
+        accent -> Orange
+        else -> TextMain
+    }
+    Row(
+        Modifier.fillMaxWidth().rowDivider().clickable(enabled = enabled, onClick = onClick).padding(vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, color = color, fontSize = 16.sp, fontWeight = FontWeight.Light, modifier = Modifier.weight(1f))
+        Text("›", color = if (enabled) Muted else Faint, fontSize = 22.sp, fontWeight = FontWeight.Light)
     }
 }
 
 @Composable
 private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardBg).padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().rowDivider().padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Light)
             Text(subtitle, color = Muted, fontSize = 12.sp)
         }
         Switch(
             checked = checked, onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(checkedTrackColor = Orange, checkedThumbColor = Color.Black),
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = Orange, checkedThumbColor = Color.Black,
+                uncheckedTrackColor = Bg, uncheckedThumbColor = Faint, uncheckedBorderColor = Faint,
+            ),
         )
     }
 }

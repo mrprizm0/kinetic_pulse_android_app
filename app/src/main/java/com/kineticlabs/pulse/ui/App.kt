@@ -1,6 +1,9 @@
 package com.kineticlabs.pulse.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -40,21 +43,25 @@ fun KineticApp(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBlu
     Scaffold(
         containerColor = Bg,
         bottomBar = {
-            NavigationBar(containerColor = CardBg) {
-                Tab.entries.forEach { t ->
-                    NavigationBarItem(
-                        selected = tab == t,
-                        onClick = { tab = t },
-                        icon = { Icon(t.icon, contentDescription = t.label) },
-                        label = { Text(t.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color.Black,
-                            indicatorColor = Orange,
-                            selectedTextColor = Orange,
-                            unselectedIconColor = Muted,
-                            unselectedTextColor = Muted,
-                        ),
-                    )
+            Column {
+                Hairline()
+                NavigationBar(containerColor = Bg, tonalElevation = 0.dp) {
+                    Tab.entries.forEach { t ->
+                        NavigationBarItem(
+                            selected = tab == t,
+                            onClick = { tab = t },
+                            icon = { Icon(t.icon, contentDescription = t.label) },
+                            label = { Text(t.label.uppercase(), fontSize = 9.sp, letterSpacing = 1.5.sp) },
+                            alwaysShowLabel = false,
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Orange,
+                                indicatorColor = Color.Transparent,
+                                selectedTextColor = Orange,
+                                unselectedIconColor = Faint,
+                                unselectedTextColor = Faint,
+                            ),
+                        )
+                    }
                 }
             }
         },

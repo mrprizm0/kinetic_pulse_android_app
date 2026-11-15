@@ -51,9 +51,7 @@ fun HistoryScreen(vm: PulseViewModel) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(20.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("History", fontSize = 28.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.weight(1f))
+        ScreenTitle("History") {
             if (history.isNotEmpty()) {
                 TextButton(onClick = {
                     val send = Intent(Intent.ACTION_SEND).apply {
@@ -62,8 +60,8 @@ fun HistoryScreen(vm: PulseViewModel) {
                         putExtra(Intent.EXTRA_TEXT, vm.historyCsv())
                     }
                     context.startActivity(Intent.createChooser(send, "Share wheelies (CSV)"))
-                }) { Text("Share") }
-                TextButton(onClick = { confirmClear = true }) { Text("Clear", color = Red) }
+                }) { Text("SHARE", style = LabelStyle.copy(color = TextMain)) }
+                TextButton(onClick = { confirmClear = true }) { Text("CLEAR", style = LabelStyle.copy(color = Red)) }
             }
         }
 
@@ -92,7 +90,7 @@ fun HistoryScreen(vm: PulseViewModel) {
         DurationChart(history.takeLast(30), best)
         Spacer(Modifier.height(16.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+        LazyColumn(modifier = Modifier.weight(1f)) {
             items(history.asReversed(), key = { it.time }) { r ->
                 HistoryRow(r, fmt.format(Date(r.time)), if (r.isWheelie) r.ms == best else r.ms == bestStoppie)
             }
@@ -117,11 +115,12 @@ fun HistoryScreen(vm: PulseViewModel) {
 private fun DurationChart(items: List<WheelieRecord>, allBest: Long) {
     val max = (items.maxOfOrNull { it.ms } ?: 1L).coerceAtLeast(1L)
     Canvas(
-        Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(14.dp)).background(CardBg).padding(10.dp)
+        Modifier.fillMaxWidth().height(96.dp).padding(vertical = 6.dp)
     ) {
         val n = items.size.coerceAtLeast(1)
         val slot = size.width / n
-        val w = (slot * 0.7f).coerceAtLeast(2f)
+        val w = (slot * 0.38f).coerceAtLeast(2f)
+        drawLine(Line, Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = 1f)
         items.forEachIndexed { i, r ->
             val h = size.height * (r.ms.toFloat() / max).coerceAtLeast(0.03f)
             drawRoundRect(
@@ -129,7 +128,7 @@ private fun DurationChart(items: List<WheelieRecord>, allBest: Long) {
                     r.kind == TrickKind.STOPPIE -> Red
                     r.ms == allBest -> Gold
                     r.kind == TrickKind.CIRCLE -> Blue
-                    else -> Orange
+                    else -> Faint
                 },
                 topLeft = Offset(i * slot + (slot - w) / 2, size.height - h),
                 size = Size(w, h),
@@ -151,7 +150,7 @@ private fun TrickChip(label: String, color: androidx.compose.ui.graphics.Color) 
 @Composable
 private fun HistoryRow(r: WheelieRecord, date: String, isBest: Boolean) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardBg).padding(14.dp),
+        Modifier.fillMaxWidth().rowDivider().padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -172,7 +171,7 @@ private fun HistoryRow(r: WheelieRecord, date: String, isBest: Boolean) {
         Text(
             fmtSecs(r.ms),
             color = if (isBest) Gold else TextMain,
-            fontSize = 22.sp, fontWeight = FontWeight.Bold,
+            style = numberStyle(26.sp, FontWeight.Light),
         )
     }
 }

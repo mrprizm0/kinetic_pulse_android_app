@@ -64,14 +64,15 @@ import kotlin.math.roundToInt
 
 private val ZOOMS = listOf(150f, 300f, 600f, 1200f)  // map radius in metres
 
-private val MapBg = Color(0xFF0B1410)
-private val MapGrid = Color(0xFF13211A)
-private val ParkColor = Color(0xFF10261A)
-private val LakeColor = Color(0xFF0E2233)
-private val TrailOuter = Color(0xFF3A3124)
-private val TrailInner = Color(0xFF8A7556)
-private val TrailSide = Color(0xFF4A4034)
-private val RingColor = Color(0x33FFFFFF)
+// monochrome map: only riders and you carry colour
+private val MapBg = Color(0xFF060607)
+private val MapGrid = Color(0xFF0E0E11)
+private val ParkColor = Color(0xFF0B0E0C)
+private val LakeColor = Color(0xFF090D13)
+private val TrailOuter = Color(0xFF1E1E23)
+private val TrailInner = Color(0xFF55555E)
+private val TrailSide = Color(0xFF1A1A1F)
+private val RingColor = Color(0x1FFFFFFF)
 
 @Composable
 fun CrewScreen(vm: PulseViewModel) {
@@ -92,100 +93,100 @@ fun CrewScreen(vm: PulseViewModel) {
     val you = riders.first()
     val mp = sim.meetPoint
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Crew", fontSize = 28.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.size(10.dp))
-            Text(
-                "DEMO", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Gold)
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-            Spacer(Modifier.weight(1f))
-            Text("${riders.size} riders", color = Muted, fontSize = 13.sp)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 20.dp)) {
+        ScreenTitle("Crew") {
+            Text("DEMO · ${riders.size} RIDERS", style = LabelStyle.copy(color = Gold))
         }
-        Text("Fake riders, to preview friend tracking. No real locations are used.", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(4.dp))
+        Text("Pretend riders, to preview friend tracking.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(16.dp))
 
         sim.alert?.let { msg ->
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Red.copy(alpha = 0.18f))
-                    .border(1.dp, Red, RoundedCornerShape(14.dp)).padding(start = 14.dp, end = 4.dp),
+                Modifier.fillMaxWidth().rowDivider().padding(bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("⚠  $msg", color = TextMain, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                if (mp == null) TextButton(onClick = { sim.regroup() }) { Text("Regroup", color = Red) }
+                Box(Modifier.size(6.dp).clip(CircleShape).background(Red))
+                Spacer(Modifier.size(10.dp))
+                Text(msg, color = Red, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                if (mp == null) {
+                    Text(
+                        "REGROUP", style = LabelStyle.copy(color = Red),
+                        modifier = Modifier.clickable { sim.regroup() }.padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
+                    )
+                }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
         }
 
         // ---- the mini-map
-        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(24.dp))) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(28.dp))
+                .border(1.dp, Line, RoundedCornerShape(28.dp))
+        ) {
             MiniMap(sim, ZOOMS[zoomIdx], selected, Modifier.fillMaxSize())
-            Column(Modifier.align(Alignment.BottomEnd).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.align(Alignment.BottomEnd).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MapButton("+", enabled = zoomIdx > 0) { zoomIdx-- }
                 MapButton("–", enabled = zoomIdx < ZOOMS.lastIndex) { zoomIdx++ }
             }
             Text(
-                "${ZOOMS[zoomIdx].roundToInt()} m",
-                color = Muted, fontSize = 11.sp,
-                modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
+                "${ZOOMS[zoomIdx].roundToInt()} M",
+                style = LabelStyle,
+                modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
             )
-            Text(
-                String.format(Locale.US, "%d km/h", (you.speed * 3.6f).roundToInt()),
-                color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.TopStart).padding(12.dp)
-                    .clip(RoundedCornerShape(8.dp)).background(Color(0xAA000000))
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-            )
+            Row(Modifier.align(Alignment.TopStart).padding(16.dp), verticalAlignment = Alignment.Bottom) {
+                Text("${(you.speed * 3.6f).roundToInt()}", style = numberStyle(28.sp, FontWeight.ExtraLight))
+                Text(" KM/H", style = LabelStyle, modifier = Modifier.padding(bottom = 5.dp))
+            }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
 
         // ---- regroup
         if (mp == null) {
-            Button(
-                onClick = { sim.regroup() },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Orange, contentColor = Color.Black),
-            ) { Text("Regroup at my spot", fontWeight = FontWeight.SemiBold) }
+            Text(
+                "REGROUP AT MY SPOT",
+                fontSize = 12.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Medium, color = Color.Black,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(Orange)
+                    .clickable { sim.regroup() }.padding(vertical = 14.dp),
+            )
         } else {
             val arrived = riders.count { !it.isYou && it.state == RiderState.ARRIVED }
             val total = riders.size - 1
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardBg).padding(start = 14.dp, end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
                     Text(
-                        if (arrived == total) "Everyone's here!" else "Waiting for the crew",
-                        fontWeight = FontWeight.SemiBold, color = if (arrived == total) Go else TextMain,
+                        if (arrived == total) "Everyone's here" else "Waiting for the crew",
+                        fontSize = 16.sp, fontWeight = FontWeight.Light, color = if (arrived == total) Go else TextMain,
                     )
-                    Text("$arrived of $total at the meeting point", color = Muted, fontSize = 12.sp)
+                    Bar(arrived / total.toFloat(), Gold, Line, Modifier.padding(top = 8.dp))
                 }
-                TextButton(onClick = { sim.cancelRegroup() }) { Text("Cancel") }
+                Spacer(Modifier.size(16.dp))
+                Text("$arrived/$total", style = numberStyle(28.sp, FontWeight.ExtraLight))
+                Text(
+                    "CANCEL", style = LabelStyle,
+                    modifier = Modifier.clickable { sim.cancelRegroup() }.padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
+                )
             }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(28.dp))
 
         // ---- riders
         SectionLabel("Riders")
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            riders.drop(1).forEach { r ->
-                RiderCard(r, you, mp, selected == r.id) { selected = if (selected == r.id) null else r.id }
-            }
+        riders.drop(1).forEach { r ->
+            RiderCard(r, you, mp, selected == r.id) { selected = if (selected == r.id) null else r.id }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(28.dp))
 
         // ---- activity
         SectionLabel("Activity")
-        Spacer(Modifier.height(8.dp))
-        sim.feed.take(12).forEach { f ->
-            Row(Modifier.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(f.color))
-                Spacer(Modifier.size(10.dp))
-                Text(f.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                Text(ago(sim.time - f.time), color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(6.dp))
+        sim.feed.take(10).forEach { f ->
+            Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(4.dp).clip(CircleShape).background(f.color))
+                Spacer(Modifier.size(12.dp))
+                Text(f.text, fontSize = 13.sp, color = TextMain.copy(alpha = 0.85f), modifier = Modifier.weight(1f))
+                Text(ago(sim.time - f.time).uppercase(), style = LabelStyle.copy(color = Faint))
             }
         }
     }
@@ -194,12 +195,12 @@ fun CrewScreen(vm: PulseViewModel) {
 @Composable
 private fun MapButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(40.dp).clip(CircleShape).background(Color(0xCC18181C))
-            .border(1.dp, Line, CircleShape)
+        Modifier.size(38.dp).clip(CircleShape).background(Color(0xCC000000))
+            .border(1.dp, Faint, CircleShape)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (enabled) TextMain else Muted, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (enabled) TextMain else Faint, fontSize = 18.sp, fontWeight = FontWeight.Light)
     }
 }
 
@@ -372,23 +373,33 @@ private fun RiderCard(r: Rider, you: Rider, meet: Offset?, selected: Boolean, on
         else -> "Riding · $kmh km/h" to Muted
     }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardBg)
-            .border(if (selected) 1.5.dp else 0.dp, if (selected) r.color else Color.Transparent, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick).padding(12.dp),
+        Modifier.fillMaxWidth().rowDivider()
+            .clickable(onClick = onClick).padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(38.dp).clip(CircleShape).background(r.color), contentAlignment = Alignment.Center) {
-            Text(r.name.take(1), color = Color.White, fontWeight = FontWeight.Bold)
+        // coloured ring, filled when selected
+        Box(
+            Modifier.size(30.dp).clip(CircleShape)
+                .background(if (selected) r.color else Color.Transparent)
+                .border(1.5.dp, r.color, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                r.name.take(1), color = if (selected) Color.Black else r.color,
+                fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            )
         }
-        Spacer(Modifier.size(12.dp))
+        Spacer(Modifier.size(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(r.name, fontWeight = FontWeight.SemiBold)
-            Text(status, color = statusColor, fontSize = 12.sp)
-            r.lastWheelie?.let { Text("Last wheelie $it", color = Muted, fontSize = 11.sp) }
+            Text(r.name, fontSize = 16.sp, fontWeight = FontWeight.Light)
+            Text(status.uppercase(), style = LabelStyle.copy(color = statusColor, fontSize = 9.sp, letterSpacing = 1.5.sp))
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text("${fmtDist(dist)} ${compass(you.pos, r.pos)}", fontWeight = FontWeight.Bold)
-            Text("Battery ${r.battery}%", color = Muted, fontSize = 11.sp)
+            Text(fmtDist(dist), style = numberStyle(20.sp, FontWeight.Light))
+            Text(
+                "${compass(you.pos, r.pos)} · ${r.battery}%",
+                style = LabelStyle.copy(fontSize = 9.sp, letterSpacing = 1.sp),
+            )
         }
     }
 }

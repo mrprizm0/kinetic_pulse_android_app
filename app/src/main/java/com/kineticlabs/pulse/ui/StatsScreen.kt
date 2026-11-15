@@ -1,6 +1,9 @@
 package com.kineticlabs.pulse.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,7 +57,7 @@ fun StatsScreen(vm: PulseViewModel) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)
     ) {
-        Text("Stats", fontSize = 28.sp, fontWeight = FontWeight.Black)
+        ScreenTitle("Stats")
         Spacer(Modifier.height(14.dp))
         SegmentToggle("This ride", "All time", allTime) { allTime = it }
         Spacer(Modifier.height(16.dp))
@@ -118,46 +121,51 @@ fun StatsScreen(vm: PulseViewModel) {
         Spacer(Modifier.height(24.dp))
         SectionLabel("Badges · ${badges.count { it.unlocked }}/${badges.size}")
         Spacer(Modifier.height(10.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            badges.chunked(3).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            badges.chunked(4).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { BadgeTile(it, Modifier.weight(1f)) }
-                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
     }
 }
 
+/** A badge: a thin progress ring with the glyph inside. Gold when earned. */
 @Composable
 private fun BadgeTile(b: Badge, modifier: Modifier) {
-    Column(
-        modifier.clip(RoundedCornerShape(14.dp)).background(CardBg).padding(10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            Modifier.size(46.dp).clip(CircleShape)
-                .background(if (b.unlocked) Gold else Line),
-            contentAlignment = Alignment.Center,
-        ) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(54.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val sw = 2.dp.toPx()
+                val inset = sw / 2
+                val arcSize = androidx.compose.ui.geometry.Size(size.width - sw, size.height - sw)
+                val tl = androidx.compose.ui.geometry.Offset(inset, inset)
+                drawArc(Line, 0f, 360f, false, tl, arcSize, style = Stroke(sw))
+                val sweep = if (b.unlocked) 360f else 360f * b.progress
+                if (sweep > 0f) {
+                    drawArc(
+                        if (b.unlocked) Gold else Orange, -90f, sweep, false, tl, arcSize,
+                        style = Stroke(sw, cap = StrokeCap.Round),
+                    )
+                }
+            }
             Text(
-                b.glyph, fontWeight = FontWeight.Black, fontSize = 14.sp,
-                color = if (b.unlocked) Color.Black else Muted,
+                b.glyph, fontWeight = FontWeight.Light, fontSize = 15.sp,
+                color = if (b.unlocked) Gold else Muted,
             )
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
-            b.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1,
+            b.title, fontSize = 11.sp, maxLines = 1, textAlign = TextAlign.Center,
             color = if (b.unlocked) TextMain else Muted,
         )
-        Text(b.desc, color = Muted, fontSize = 10.sp, textAlign = TextAlign.Center, maxLines = 2, lineHeight = 12.sp)
-        Spacer(Modifier.height(6.dp))
-        if (b.unlocked) {
-            Text("UNLOCKED", color = Gold, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        } else {
-            Bar(b.progress, Orange, Line, height = 4)
-            Text(b.progressText, color = Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
-        }
+        Text(
+            if (b.unlocked) "EARNED" else b.progressText,
+            style = LabelStyle.copy(fontSize = 9.sp, letterSpacing = 1.sp, color = if (b.unlocked) Gold else Faint),
+            maxLines = 1,
+        )
     }
 }
