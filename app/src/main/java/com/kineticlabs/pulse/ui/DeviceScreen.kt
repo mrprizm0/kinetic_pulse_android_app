@@ -117,7 +117,7 @@ fun DeviceScreen(vm: PulseViewModel) {
         ActionRow("Reconnect", enabled = !demo) { vm.ble.reconnect() }
 
         Spacer(Modifier.height(32.dp))
-        Text("KINETIC PULSE 1.3 · TRICKS NEED FIRMWARE V1.5+", style = LabelStyle.copy(color = Faint, fontSize = 9.sp))
+        Text("KINETIC PULSE 1.4 · RIDE ON THE PULSE NEEDS FIRMWARE V2.0+", style = LabelStyle.copy(color = Faint, fontSize = 9.sp))
     }
 
     if (confirmResetAll) {

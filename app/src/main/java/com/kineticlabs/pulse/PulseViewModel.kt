@@ -17,10 +17,42 @@ import com.kineticlabs.pulse.ble.WheelieEvent
 import com.kineticlabs.pulse.crew.CrewSim
 import com.kineticlabs.pulse.data.HistoryStore
 import com.kineticlabs.pulse.data.WheelieRecord
+import android.annotation.SuppressLint
+import android.location.Location
+import android.location.LocationManager
+import android.os.CancellationSignal
+import androidx.core.location.LocationManagerCompat
+import com.kineticlabs.pulse.ble.PlaceForPulse
+import com.kineticlabs.pulse.ble.PlaceKind
+import com.kineticlabs.pulse.ble.placesBytes
+import com.kineticlabs.pulse.ble.rideInfoBytes
+import com.kineticlabs.pulse.ride.RideRecorder
+import com.kineticlabs.pulse.ride.RideService
+import com.kineticlabs.pulse.ride.RideState
+import com.kineticlabs.pulse.ride.RideStore
+import com.kineticlabs.pulse.ride.SavedRide
+import com.kineticlabs.pulse.spots.Rideout
+import com.kineticlabs.pulse.spots.Spot
+import com.kineticlabs.pulse.spots.SpotsApi
+import com.kineticlabs.pulse.spots.SpotsException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
+import kotlin.coroutines.resume
+
+/** What the Spots screen shows. */
+data class SpotsUi(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val spots: List<Spot> = emptyList(),
+    val rideouts: List<Rideout> = emptyList(),
+    val from: Location? = null,
+    val updatedAt: Long = 0L,
+)
 
 /** What the post-wheelie summary shows. */
 data class Summary(
@@ -53,6 +85,134 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
     private val _summary = MutableStateFlow<Summary?>(null)
     val summary: StateFlow<Summary?> = _summary
 
+    // ---- ride tracking
+    private val rideStore = RideStore(app)
+    private val _rides = MutableStateFlow(rideStore.load())
+    val rides: StateFlow<List<SavedRide>> = _rides  // oldest first
+    val ride: StateFlow<RideState> = RideRecorder.state
+
+    fun hasLocationPermission() = RideService.hasLocationPermission(getApplication())
+
+    fun startRide() {
+        if (ride.value.active) return
+        RideService.start(getApplication())
+        say("Ride started")
+    }
+
+    fun stopRide() {
+        val done = RideService.stop(getApplication()) ?: return
+        RideStore.from(done)?.let { saved ->
+            _rides.value = _rides.value + saved
+            rideStore.saveAll(_rides.value)
+        }
+        pushRideToPulse()
+        say("Ride saved")
+    }
+
+    fun deleteRide(r: SavedRide) {
+        _rides.value = _rides.value - r
+        rideStore.saveAll(_rides.value)
+    }
+
+    // ---- spots + rideouts (when connected to the internet)
+    private val _spots = MutableStateFlow(SpotsUi())
+    val spots: StateFlow<SpotsUi> = _spots
+
+    fun refreshSpots() {
+        if (_spots.value.loading) return
+        _spots.value = _spots.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            val here = currentLocation()
+            if (here == null) {
+                _spots.value = _spots.value.copy(loading = false, error = "Couldn't get your location. Turn on location and try again.")
+                return@launch
+            }
+            try {
+                val places = SpotsApi.places(here.latitude, here.longitude)
+                val outs = try { SpotsApi.rideouts(here.latitude, here.longitude) } catch (_: SpotsException) { emptyList() }
+                _spots.value = SpotsUi(spots = places, rideouts = outs, from = here, updatedAt = System.currentTimeMillis())
+                pushPlacesToPulse()
+            } catch (e: SpotsException) {
+                _spots.value = _spots.value.copy(loading = false, error = e.message)
+            }
+        }
+    }
+
+    /** Posts a rideout at the rider's current spot. Calls back with an error message, or null on success. */
+    fun postRideout(title: String, note: String, startsAt: Long, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val here = currentLocation()
+            if (here == null) { done("Couldn't get your location for the meeting spot."); return@launch }
+            try {
+                SpotsApi.postRideout(title, note, here.latitude, here.longitude, startsAt)
+                done(null)
+                _spots.value = _spots.value.copy(loading = false)
+                refreshSpots()
+            } catch (e: SpotsException) {
+                done(e.message)
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")  // only called after the permission check
+    private suspend fun currentLocation(): Location? {
+        RideRecorder.lastFix.value?.let { if (System.currentTimeMillis() - it.time < 120_000) return it }
+        if (!hasLocationPermission()) return null
+        val lm = getApplication<Application>().getSystemService(LocationManager::class.java) ?: return null
+        val fresh = withTimeoutOrNull(15_000) {
+            suspendCancellableCoroutine<Location?> { cont ->
+                val cancel = CancellationSignal()
+                cont.invokeOnCancellation { cancel.cancel() }
+                val provider = if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) LocationManager.GPS_PROVIDER
+                               else LocationManager.NETWORK_PROVIDER
+                try {
+                    LocationManagerCompat.getCurrentLocation(lm, provider, cancel, androidx.core.content.ContextCompat.getMainExecutor(getApplication<Application>())) { loc ->
+                        if (cont.isActive) cont.resume(loc)
+                    }
+                } catch (_: Exception) { if (cont.isActive) cont.resume(null) }
+            }
+        }
+        val loc = fresh
+            ?: try { lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (_: Exception) { null }
+            ?: try { lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (_: Exception) { null }
+        loc?.let { RideRecorder.noteFix(it) }
+        return loc
+    }
+
+    // ---- send ride + spots to the Pulse
+    private fun pushRideToPulse() {
+        if (!ble.isConnected || ble.isDemo || !ble.supportsRide) return
+        val r = ride.value
+        ble.sendRideInfo(
+            rideInfoBytes(
+                active = r.active, hasFix = r.hasFix, elapsedS = r.elapsedMs() / 1000, distanceM = r.distanceM.toLong(),
+                speedKmh = r.speedMs * 3.6f, topKmh = r.topSpeedMs * 3.6f, wheelies = r.wheelies, bestMs = r.bestWheelieMs,
+            )
+        )
+    }
+
+    private fun pushPlacesToPulse() {
+        if (!ble.isConnected || ble.isDemo || !ble.supportsRide) return
+        val s = _spots.value
+        val from = RideRecorder.lastFix.value ?: s.from ?: return
+        fun bearing(lat: Double, lon: Double): Int {
+            val to = Location("").apply { latitude = lat; longitude = lon }
+            return from.bearingTo(to).toInt()
+        }
+        fun dist(lat: Double, lon: Double): Int {
+            val out = FloatArray(1)
+            Location.distanceBetween(from.latitude, from.longitude, lat, lon, out)
+            return out[0].toInt()
+        }
+        // the next rideout first, then the closest places that allow motorbikes, then the rest
+        val list = mutableListOf<PlaceForPulse>()
+        s.rideouts.firstOrNull()?.let { list += PlaceForPulse(PlaceKind.RIDEOUT, true, dist(it.lat, it.lon), bearing(it.lat, it.lon), it.title) }
+        val sorted = s.spots.sortedWith(compareBy({ !it.motorsOk }, { it.distanceM }))
+        sorted.take(4 - list.size).forEach {
+            list += PlaceForPulse(PlaceKind.of(it.kind), it.motorsOk, dist(it.lat, it.lon), bearing(it.lat, it.lon), it.name)
+        }
+        ble.sendPlaces(placesBytes(list))
+    }
     // ---- settings (saved)
     val keepScreenOn = MutableStateFlow(prefs.getBoolean("keep_on", true))
     val voiceOn = MutableStateFlow(prefs.getBoolean("voice", false))
@@ -83,6 +243,21 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { ble.wheelies.collect { onWheelie(it) } }
         viewModelScope.launch { ble.tricks.collect { onTrick(it) } }
         viewModelScope.launch { ble.live.collect { onLive(it) } }
+        // keep the Pulse's trip screen up to date (and resend spots now and then)
+        viewModelScope.launch {
+            var n = 0
+            while (true) {
+                pushRideToPulse()
+                if (n++ % 15 == 0) pushPlacesToPulse()
+                delay(2000)
+            }
+        }
+        // a freshly connected Pulse gets everything straight away
+        viewModelScope.launch {
+            ble.status.collect { st ->
+                if (st == PulseBle.Status.CONNECTED) { delay(1500); pushRideToPulse(); pushPlacesToPulse() }
+            }
+        }
     }
 
     private fun say(text: String, flush: Boolean = true) {
@@ -149,6 +324,7 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
             _history.value = _history.value + rec
         }
         session += rec
+        RideRecorder.addWheelie(rec.ms)
         showSummary(rec, e.prevBestMs)
         crew.addYourWheelie(rec.ms / 1000f, rec.peak.toInt())
         vibrate(short = false, best = e.packet.newBest)
@@ -184,6 +360,7 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
                     _history.value = _history.value + rec
                 }
                 session += rec
+                RideRecorder.addStoppie()
                 showSummary(rec, prevBest)
                 val secs = String.format(Locale.US, "%.1f", t.ms / 1000f)
                 crew.addYourEvent("You held a ${secs}s stoppie · ${t.peak.toInt()}°")

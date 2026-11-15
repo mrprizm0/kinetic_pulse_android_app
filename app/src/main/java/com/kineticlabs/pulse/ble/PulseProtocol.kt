@@ -19,6 +19,10 @@ object PulseUuid {
     val RIDE_EXTRA: UUID = make(7)
     val ALL_TIME_EXTRA: UUID = make(8)
     val TRICK: UUID = make(9)
+    /** phone -> Pulse: ride overview (written every couple of seconds while riding) */
+    val RIDE_INFO: UUID = make(10)
+    /** phone -> Pulse: up to 4 nearby spots or rideouts */
+    val PLACES: UUID = make(11)
 
     /** Standard "turn notifications on" descriptor. */
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -166,3 +170,55 @@ data class StatsExtraPacket(
 
 /** Landing softness 0..100 from the touchdown hit (same formula as the device). */
 fun landingScore(g: Float): Int = (100f - (g - 1f) * 25f).coerceIn(0f, 100f).toInt()
+
+/**
+ * 000A RIDE_INFO, phone -> Pulse, 20 bytes:
+ *   u8 flags (bit0 ride active, bit1 GPS fix), u32 elapsed s, u32 distance m,
+ *   u16 speed km/h x10, u16 top speed km/h x10, u16 wheelies, u32 best wheelie ms, u8 reserved
+ */
+fun rideInfoBytes(active: Boolean, hasFix: Boolean, elapsedS: Long, distanceM: Long, speedKmh: Float,
+                  topKmh: Float, wheelies: Int, bestMs: Long): ByteArray {
+    val bb = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN)
+    bb.put(((if (active) 1 else 0) or (if (hasFix) 2 else 0)).toByte())
+    bb.putInt(elapsedS.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
+    bb.putInt(distanceM.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
+    bb.putShort((speedKmh * 10).toInt().coerceIn(0, 65535).toShort())
+    bb.putShort((topKmh * 10).toInt().coerceIn(0, 65535).toShort())
+    bb.putShort(wheelies.coerceIn(0, 65535).toShort())
+    bb.putInt(bestMs.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
+    bb.put(0)
+    return bb.array()
+}
+
+/** Spot kinds as the Pulse knows them. */
+object PlaceKind {
+    const val MOTOCROSS = 0; const val MOTORSPORT = 1; const val OFFROAD = 2
+    const val PUMP = 3; const val BMX = 4; const val SKATEPARK = 5; const val RIDEOUT = 9
+    fun of(kind: String): Int = when (kind) {
+        "motocross track" -> MOTOCROSS; "motorsport" -> MOTORSPORT; "off-road area" -> OFFROAD
+        "pump track" -> PUMP; "bmx track" -> BMX; "skatepark" -> SKATEPARK; else -> MOTORSPORT
+    }
+}
+
+data class PlaceForPulse(val kind: Int, val motorsOk: Boolean, val distanceM: Int, val bearingDeg: Int, val name: String)
+
+/**
+ * 000B PLACES, phone -> Pulse: u8 count (0..4), then per place 26 bytes:
+ *   u8 kind, u8 motors ok, u16 distance in 10 m steps, u16 bearing deg, char[20] name (ASCII, 0-padded)
+ */
+fun placesBytes(places: List<PlaceForPulse>): ByteArray {
+    val list = places.take(4)
+    val bb = ByteBuffer.allocate(1 + 26 * list.size).order(ByteOrder.LITTLE_ENDIAN)
+    bb.put(list.size.toByte())
+    for (p in list) {
+        bb.put(p.kind.toByte())
+        bb.put((if (p.motorsOk) 1 else 0).toByte())
+        bb.putShort((p.distanceM / 10).coerceIn(0, 65535).toShort())
+        bb.putShort(((p.bearingDeg % 360 + 360) % 360).toShort())
+        // plain ASCII only: the Pulse font has no accents or emoji
+        val ascii = p.name.map { if (it.code in 32..126) it else '?' }.joinToString("").take(20)
+        val name = ByteArray(20); ascii.toByteArray(Charsets.US_ASCII).copyInto(name)
+        bb.put(name)
+    }
+    return bb.array()
+}

@@ -89,6 +89,10 @@ class PulseBle(context: Context) {
 
     private var gatt: BluetoothGatt? = null
     private var commandChar: BluetoothGattCharacteristic? = null
+    private var rideInfoChar: BluetoothGattCharacteristic? = null
+    private var placesChar: BluetoothGattCharacteristic? = null
+    private var rideInfoQueued = false
+    private var placesQueued = false
     private var scanning = false
     private var wanted = false
     private val ops = ArrayDeque<(BluetoothGatt) -> Boolean>()
@@ -122,6 +126,25 @@ class PulseBle(context: Context) {
         clearValues()
         start()
     }
+
+    /** Ride overview for the Pulse's trip screen. Skipped if the last one hasn't gone out yet. */
+    fun sendRideInfo(bytes: ByteArray) {
+        val c = rideInfoChar ?: return
+        if (rideInfoQueued) return
+        rideInfoQueued = true
+        enqueue { g -> rideInfoQueued = false; writeChar(g, c, bytes) }
+    }
+
+    /** Nearby spots for the Pulse's spots screen. */
+    fun sendPlaces(bytes: ByteArray) {
+        val c = placesChar ?: return
+        if (placesQueued) return
+        placesQueued = true
+        enqueue { g -> placesQueued = false; writeChar(g, c, bytes) }
+    }
+
+    /** True once the connected Pulse has the ride/places channels (firmware V2.0+). */
+    val supportsRide: Boolean get() = rideInfoChar != null
 
     fun send(cmd: PulseCommand) {
         if (isDemo) { demoCommand(cmd); return }
@@ -183,6 +206,10 @@ class PulseBle(context: Context) {
         }
         gatt = null
         commandChar = null
+        rideInfoChar = null
+        placesChar = null
+        rideInfoQueued = false
+        placesQueued = false
         ops.clear()
         opBusy = false
     }
@@ -247,6 +274,8 @@ class PulseBle(context: Context) {
         val s = g.getService(PulseUuid.SERVICE)
         if (s == null) { g.disconnect(); return }
         commandChar = s.getCharacteristic(PulseUuid.COMMAND)
+        rideInfoChar = s.getCharacteristic(PulseUuid.RIDE_INFO)  // null on older firmware
+        placesChar = s.getCharacteristic(PulseUuid.PLACES)
 
         val notify = listOf(
             PulseUuid.LIVE, PulseUuid.WHEELIE, PulseUuid.RIDE, PulseUuid.ALL_TIME,

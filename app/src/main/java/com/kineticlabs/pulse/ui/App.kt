@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
@@ -30,6 +31,7 @@ import com.kineticlabs.pulse.PulseViewModel
 
 enum class Tab(val label: String, val icon: ImageVector) {
     LIVE("Live", Icons.Filled.Home),
+    RIDE("Ride", Icons.Filled.PlayArrow),
     STATS("Stats", Icons.Filled.Star),
     CREW("Crew", Icons.Filled.LocationOn),
     HISTORY("History", Icons.AutoMirrored.Filled.List),
@@ -37,7 +39,12 @@ enum class Tab(val label: String, val icon: ImageVector) {
 }
 
 @Composable
-fun KineticApp(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBluetooth: () -> Unit) {
+fun KineticApp(
+    vm: PulseViewModel,
+    onRequestPermissions: () -> Unit,
+    onEnableBluetooth: () -> Unit,
+    onRequestLocation: () -> Unit,
+) {
     var tab by rememberSaveable { mutableStateOf(Tab.LIVE) }
 
     Scaffold(
@@ -69,6 +76,7 @@ fun KineticApp(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBlu
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
                 Tab.LIVE -> LiveScreen(vm, onRequestPermissions, onEnableBluetooth)
+                Tab.RIDE -> RideScreen(vm, onRequestLocation)
                 Tab.STATS -> StatsScreen(vm)
                 Tab.CREW -> CrewScreen(vm)
                 Tab.HISTORY -> HistoryScreen(vm)

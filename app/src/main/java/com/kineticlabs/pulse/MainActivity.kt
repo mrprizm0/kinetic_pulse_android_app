@@ -22,6 +22,15 @@ class MainActivity : ComponentActivity() {
     private val askPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { vm.ble.start() }
 
+    // location for ride tracking + spots; notifications for the "ride in progress" note
+    private val askLocation =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    private val locationPermissions: Array<String> = buildList {
+        add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        add(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (android.os.Build.VERSION.SDK_INT >= 33) add(android.Manifest.permission.POST_NOTIFICATIONS)
+    }.toTypedArray()
+
     private val askBluetoothOn =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.ble.start() }
 
@@ -38,6 +47,7 @@ class MainActivity : ComponentActivity() {
                 KineticApp(
                     vm = vm,
                     onRequestPermissions = { askPermissions.launch(PulseBle.requiredPermissions) },
+                    onRequestLocation = { askLocation.launch(locationPermissions) },
                     onEnableBluetooth = {
                         try {
                             askBluetoothOn.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
