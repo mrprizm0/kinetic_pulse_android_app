@@ -52,6 +52,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kineticlabs.pulse.PulseViewModel
 import com.kineticlabs.pulse.ride.SavedRide
+import com.kineticlabs.pulse.ride.Turn
+import com.kineticlabs.pulse.ble.PulseBle
 import com.kineticlabs.pulse.spots.Rideout
 import com.kineticlabs.pulse.spots.Spot
 import kotlinx.coroutines.delay
@@ -75,6 +77,7 @@ fun RideScreen(vm: PulseViewModel, onRequestLocation: () -> Unit) {
         Spacer(Modifier.height(14.dp))
         SegmentToggle("Track", "Spots", spotsTab) { spotsTab = it }
         Spacer(Modifier.height(20.dp))
+        if (vm.hasLocationPermission()) RouteCard(vm)
         if (!vm.hasLocationPermission()) {
             Text("Ride tracking and nearby spots need your location.", fontSize = 16.sp, fontWeight = FontWeight.Light)
             Spacer(Modifier.height(6.dp))
@@ -85,6 +88,59 @@ fun RideScreen(vm: PulseViewModel, onRequestLocation: () -> Unit) {
         }
         if (spotsTab) SpotsPanel(vm) else TrackPanel(vm)
     }
+}
+
+
+// ------------------------------------------------------------------- route (beta)
+
+@Composable
+private fun RouteCard(vm: PulseViewModel) {
+    val ui by vm.route.collectAsState()
+    val status by vm.ble.status.collectAsState()
+    ui.error?.let { err ->
+        Row(Modifier.fillMaxWidth().padding(bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(err, color = Red, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Text("OK", style = LabelStyle.copy(color = Muted), modifier = Modifier.clickable { vm.dismissRouteError() }.padding(8.dp))
+        }
+    }
+    if (ui.loading) {
+        Text("Finding a route…", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 14.dp))
+        return
+    }
+    val nav = ui.route ?: return
+    val p = ui.progress
+    Column(Modifier.fillMaxWidth().background(CardBg).border(1.dp, if (p?.offRoute == true) Red else Line).padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("ROUTE", style = LabelStyle.copy(color = Orange))
+            Spacer(Modifier.width(8.dp))
+            Text("BETA", style = LabelStyle.copy(color = Color.Black, fontSize = 9.sp),
+                modifier = Modifier.background(Gold).padding(horizontal = 5.dp, vertical = 1.dp))
+            Spacer(Modifier.weight(1f))
+            Text("END", style = LabelStyle.copy(color = Red), modifier = Modifier.clickable { vm.endRoute() }.padding(6.dp))
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(nav.name, fontSize = 18.sp, fontWeight = FontWeight.Light, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(6.dp))
+        val line = when {
+            p == null -> "${fmtKm(nav.lengthM)} · waiting for GPS"
+            p.arrived -> "You've arrived"
+            p.offRoute -> "Off route · head back to the orange line"
+            p.nextTurn != 0 -> "${fmtKm(p.leftM)} to go · ${Turn.words(p.nextTurn)} in ${fmtKm(p.nextTurnM)}"
+            else -> "${fmtKm(p.leftM)} to go"
+        }
+        Text(line, color = if (p?.offRoute == true) Red else Muted, fontSize = 13.sp)
+        Spacer(Modifier.height(10.dp))
+        RouteCanvas(nav.points, Modifier.fillMaxWidth().aspectRatio(2.2f),
+            you = p?.let { nav.points[it.index.coerceIn(0, nav.points.size - 1)] })
+        Spacer(Modifier.height(8.dp))
+        val pulseNote = when {
+            status != PulseBle.Status.CONNECTED -> "Connect your Pulse to see it on the route screen."
+            !vm.ble.supportsRoute -> "Update your Pulse to firmware V2.6 to see routes on it."
+            else -> "Showing on your Pulse's route screen."
+        }
+        Text(pulseNote, color = Faint, fontSize = 11.sp)
+    }
+    Spacer(Modifier.height(18.dp))
 }
 
 // ------------------------------------------------------------------ tracking
@@ -142,13 +198,14 @@ private fun TrackPanel(vm: PulseViewModel) {
         rides.asReversed().forEach { ride ->
             RideRow(ride, fmt.format(Date(ride.startedAt)), open == ride.startedAt,
                 onClick = { open = if (open == ride.startedAt) null else ride.startedAt },
-                onDelete = { vm.deleteRide(ride) })
+                onDelete = { vm.deleteRide(ride) },
+                onFollow = { vm.followRide(ride) })
         }
     }
 }
 
 @Composable
-private fun RideRow(r: SavedRide, date: String, expanded: Boolean, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun RideRow(r: SavedRide, date: String, expanded: Boolean, onClick: () -> Unit, onDelete: () -> Unit, onFollow: () -> Unit) {
     Column(Modifier.fillMaxWidth().rowDivider().clickable(onClick = onClick).padding(vertical = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -167,14 +224,18 @@ private fun RideRow(r: SavedRide, date: String, expanded: Boolean, onClick: () -
                 Tile("Avg", "${(r.avgMovingMs * 3.6f).roundToInt()}", sub = "km/h"),
                 Tile("Best", if (r.bestWheelieMs > 0) fmtSecs(r.bestWheelieMs) else DASH, Orange),
             ))
-            TextButton(onClick = onDelete) { Text("DELETE RIDE", style = LabelStyle.copy(color = Red)) }
+            Row {
+                if (r.path.size >= 2) TextButton(onClick = onFollow) { Text("FOLLOW ON PULSE · BETA", style = LabelStyle.copy(color = Orange)) }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDelete) { Text("DELETE RIDE", style = LabelStyle.copy(color = Red)) }
+            }
         }
     }
 }
 
 /** The route as a line, scaled to fit. No map tiles: just the shape of where you went. */
 @Composable
-private fun RouteCanvas(path: List<Pair<Double, Double>>, modifier: Modifier) {
+private fun RouteCanvas(path: List<Pair<Double, Double>>, modifier: Modifier, you: Pair<Double, Double>? = null) {
     Box(modifier.background(CardBg).border(1.dp, Line), contentAlignment = Alignment.Center) {
         if (path.size < 2) {
             Text("route appears once you start moving", color = Faint, fontSize = 12.sp)
@@ -194,6 +255,11 @@ private fun RouteCanvas(path: List<Pair<Double, Double>>, modifier: Modifier) {
             drawPath(p, Orange, style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
             drawCircle(Go, 5.dp.toPx(), pt(0))
             drawCircle(TextMain, 5.dp.toPx(), pt(path.size - 1))
+            you?.let { (la, lo) ->
+                val c = Offset((ox + (lo * k - minX) * s).toFloat(), (size.height - oy - (la - minY) * s).toFloat())
+                drawCircle(Blue, 7.dp.toPx(), c)
+                drawCircle(TextMain, 3.dp.toPx(), c)
+            }
         }
     }
 }
@@ -228,7 +294,9 @@ private fun SpotsPanel(vm: PulseViewModel) {
         Text("No group rides posted nearby yet. Post one and the crew can find it.", color = Muted, fontSize = 13.sp)
     }
     val whenFmt = remember { SimpleDateFormat("EEE d MMM · h:mm a", Locale.getDefault()) }
-    ui.rideouts.forEach { r -> RideoutRow(r, whenFmt.format(Date(r.startsAt))) { openMap(ctx, r.lat, r.lon, r.title) } }
+    ui.rideouts.forEach { r ->
+        RideoutRow(r, whenFmt.format(Date(r.startsAt)), onRoute = { vm.routeTo(r.lat, r.lon, r.title) }) { openMap(ctx, r.lat, r.lon, r.title) }
+    }
 
     // ---- spots
     Spacer(Modifier.height(22.dp))
@@ -244,9 +312,12 @@ private fun SpotsPanel(vm: PulseViewModel) {
     Spacer(Modifier.height(8.dp))
     val shown = ui.spots.filter { when (filter) { 1 -> it.motorsOk; 2 -> !it.motorsOk; else -> true } }
     if (shown.isEmpty() && !ui.loading && ui.error == null) Text("Nothing found within 30 km.", color = Muted, fontSize = 13.sp)
-    shown.forEach { s -> SpotRow(s) { openMap(ctx, s.lat, s.lon, s.name) } }
+    shown.forEach { s -> SpotRow(s, onRoute = { vm.routeTo(s.lat, s.lon, s.name) }) { openMap(ctx, s.lat, s.lon, s.name) } }
 
     Spacer(Modifier.height(14.dp))
+    Text("ROUTE (beta) gets a road route from OpenStreetMap through the public OSRM router. It sends your start and end points there, nothing else. Check the route makes sense before you ride it.",
+        color = Faint, fontSize = 11.sp)
+    Spacer(Modifier.height(6.dp))
     Text("Places come from OpenStreetMap. Most skateparks, BMX and pump tracks don't allow motorbikes, so check the rules before you ride, and ride where it's legal.",
         color = Faint, fontSize = 11.sp)
 
@@ -254,7 +325,7 @@ private fun SpotsPanel(vm: PulseViewModel) {
 }
 
 @Composable
-private fun RideoutRow(r: Rideout, whenText: String, onClick: () -> Unit) {
+private fun RideoutRow(r: Rideout, whenText: String, onRoute: () -> Unit, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().rowDivider().clickable(onClick = onClick).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(28.dp).background(RideoutColor), contentAlignment = Alignment.Center) {
             Text("R", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -265,11 +336,12 @@ private fun RideoutRow(r: Rideout, whenText: String, onClick: () -> Unit) {
             Text(whenText + if (r.note.isNotBlank()) " · ${r.note}" else "", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Text(fmtKm(r.distanceM.toDouble()), style = numberStyle(18.sp, FontWeight.Light))
+        RouteButton(onRoute)
     }
 }
 
 @Composable
-private fun SpotRow(s: Spot, onClick: () -> Unit) {
+private fun SpotRow(s: Spot, onRoute: () -> Unit, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().rowDivider().clickable(onClick = onClick).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(28.dp).background(if (s.motorsOk) SpotMotor else SpotNoMotor), contentAlignment = Alignment.Center) {
             Text(s.kind.first().uppercase(), color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -281,7 +353,15 @@ private fun SpotRow(s: Spot, onClick: () -> Unit) {
                 style = LabelStyle.copy(fontSize = 9.sp, letterSpacing = 1.sp, color = if (s.motorsOk) Go else Muted))
         }
         Text(fmtKm(s.distanceM.toDouble()), style = numberStyle(18.sp, FontWeight.Light))
+        RouteButton(onRoute)
     }
+}
+
+@Composable
+private fun RouteButton(onClick: () -> Unit) {
+    Spacer(Modifier.width(10.dp))
+    Text("ROUTE", style = LabelStyle.copy(color = Orange, fontSize = 10.sp),
+        modifier = Modifier.border(1.dp, Orange).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 6.dp))
 }
 
 @Composable

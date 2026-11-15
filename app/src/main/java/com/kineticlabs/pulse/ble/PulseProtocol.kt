@@ -23,6 +23,8 @@ object PulseUuid {
     val RIDE_INFO: UUID = make(10)
     /** phone -> Pulse: up to 4 nearby spots or rideouts */
     val PLACES: UUID = make(11)
+    /** phone -> Pulse: a route to follow (beta, firmware V2.6+) */
+    val ROUTE: UUID = make(12)
 
     /** Standard "turn notifications on" descriptor. */
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")

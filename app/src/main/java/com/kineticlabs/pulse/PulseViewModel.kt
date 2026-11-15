@@ -31,6 +31,11 @@ import com.kineticlabs.pulse.ride.RideService
 import com.kineticlabs.pulse.ride.RideState
 import com.kineticlabs.pulse.ride.RideStore
 import com.kineticlabs.pulse.ride.SavedRide
+import com.kineticlabs.pulse.ride.NavRoute
+import com.kineticlabs.pulse.ride.RouteNav
+import com.kineticlabs.pulse.ride.RoutePacket
+import com.kineticlabs.pulse.ride.RouteProgress
+import com.kineticlabs.pulse.ride.Turn
 import com.kineticlabs.pulse.spots.Rideout
 import com.kineticlabs.pulse.spots.Spot
 import com.kineticlabs.pulse.spots.SpotsApi
@@ -52,6 +57,14 @@ data class SpotsUi(
     val rideouts: List<Rideout> = emptyList(),
     val from: Location? = null,
     val updatedAt: Long = 0L,
+)
+
+/** Route following (beta). */
+data class RouteUi(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val route: NavRoute? = null,
+    val progress: RouteProgress? = null,
 )
 
 /** What the post-wheelie summary shows. */
@@ -179,6 +192,86 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
         return loc
     }
 
+
+    // ---- route following (beta)
+    private val _route = MutableStateFlow(RouteUi())
+    val route: StateFlow<RouteUi> = _route
+    private var routeHint = 0
+    private var lastTurnSaid = -1L
+
+    /** A road route from where you are to a spot or rideout. */
+    fun routeTo(lat: Double, lon: Double, name: String) {
+        if (_route.value.loading) return
+        _route.value = _route.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            val here = currentLocation()
+            if (here == null) {
+                _route.value = _route.value.copy(loading = false, error = "Couldn't get your location. Turn on location and try again.")
+                return@launch
+            }
+            try {
+                startRoute(RouteNav.fetchRoad(here.latitude, here.longitude, lat, lon, name))
+            } catch (e: RouteNav.RouteException) {
+                _route.value = _route.value.copy(loading = false, error = e.message)
+            } catch (e: Exception) {
+                _route.value = _route.value.copy(loading = false, error = "Couldn't make a route to there.")
+            }
+        }
+    }
+
+    /** Ride one of your saved rides again, following its line. */
+    fun followRide(r: SavedRide) {
+        val fmt = java.text.SimpleDateFormat("d MMM", Locale.getDefault())
+        val nav = RouteNav.fromRide(r, "ride " + fmt.format(java.util.Date(r.startedAt)))
+        if (nav == null) { _route.value = RouteUi(error = "That ride has no route to follow."); return }
+        startRoute(nav)
+    }
+
+    private fun startRoute(nav: NavRoute) {
+        _route.value = RouteUi(route = nav)
+        routeHint = 0
+        lastTurnSaid = -1L
+        if (!ride.value.active && hasLocationPermission()) startRide()  // the ride's GPS drives the route
+        pushRouteToPulse()
+        say("Route started. " + fmtDistanceWords(nav.lengthM))
+    }
+
+    fun endRoute() {
+        _route.value = RouteUi()
+        if (ble.isConnected && !ble.isDemo && ble.supportsRoute) ble.sendRoute(listOf(RoutePacket.clear()))
+    }
+
+    fun dismissRouteError() { _route.value = _route.value.copy(error = null) }
+
+    private fun pushRouteToPulse() {
+        if (!ble.isConnected || ble.isDemo || !ble.supportsRoute) return
+        val nav = _route.value.route ?: return
+        ble.sendRoute(RoutePacket.load(nav))
+    }
+
+    private fun updateRouteProgress() {
+        val nav = _route.value.route ?: return
+        val fix = RideRecorder.lastFix.value ?: return
+        if (System.currentTimeMillis() - fix.time > 10_000) return
+        val bearing = if (fix.hasBearing() && fix.hasSpeed() && fix.speed > 1.5f) fix.bearing else null
+        val p = RouteNav.progress(nav, fix.latitude, fix.longitude, bearing, routeHint)
+        routeHint = p.index
+        val was = _route.value.progress
+        _route.value = _route.value.copy(progress = p)
+        if (ble.isConnected && !ble.isDemo && ble.supportsRoute) ble.sendRouteProgress(RoutePacket.progress(nav, p))
+        // voice: each turn once, ~120 m before it; off route / arrived once when they start
+        val key = (p.alongM + p.nextTurnM).toLong() * 16 + p.nextTurn
+        if (p.nextTurn != 0 && p.nextTurnM < 120 && key != lastTurnSaid && !p.offRoute) {
+            lastTurnSaid = key
+            say(if (p.nextTurn == 9) "Arriving" else Turn.words(p.nextTurn).replaceFirstChar { it.uppercase() })
+        }
+        if (p.offRoute && was?.offRoute != true) say("Off route")
+        if (p.arrived && was?.arrived != true) { say("You've arrived"); vibrate(short = false, best = true) }
+    }
+
+    private fun fmtDistanceWords(m: Double): String =
+        if (m < 1000) "${m.toInt()} metres" else String.format(Locale.US, "%.1f kilometres", m / 1000)
+
     // ---- send ride + spots to the Pulse
     private fun pushRideToPulse() {
         if (!ble.isConnected || ble.isDemo || !ble.supportsRide) return
@@ -248,6 +341,7 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
             var n = 0
             while (true) {
                 pushRideToPulse()
+                updateRouteProgress()
                 if (n++ % 15 == 0) pushPlacesToPulse()
                 delay(2000)
             }
@@ -255,7 +349,7 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
         // a freshly connected Pulse gets everything straight away
         viewModelScope.launch {
             ble.status.collect { st ->
-                if (st == PulseBle.Status.CONNECTED) { delay(1500); pushRideToPulse(); pushPlacesToPulse() }
+                if (st == PulseBle.Status.CONNECTED) { delay(1500); pushRideToPulse(); pushPlacesToPulse(); pushRouteToPulse() }
             }
         }
     }

@@ -91,6 +91,8 @@ class PulseBle(context: Context) {
     private var commandChar: BluetoothGattCharacteristic? = null
     private var rideInfoChar: BluetoothGattCharacteristic? = null
     private var placesChar: BluetoothGattCharacteristic? = null
+    private var routeChar: BluetoothGattCharacteristic? = null
+    private var routeProgressQueued = false
     private var rideInfoQueued = false
     private var placesQueued = false
     private var scanning = false
@@ -142,6 +144,27 @@ class PulseBle(context: Context) {
         placesQueued = true
         enqueue { g -> placesQueued = false; writeChar(g, c, bytes) }
     }
+
+    /** A whole route (header + points). Replaces any route still waiting to go out. */
+    fun sendRoute(packets: List<ByteArray>) {
+        val c = routeChar ?: return
+        routeGen++
+        val gen = routeGen
+        for (p in packets) enqueue { g -> if (gen != routeGen) false else writeChar(g, c, p) }
+    }
+
+    /** Where you are on the route. Skipped if the last one hasn't gone out yet. */
+    fun sendRouteProgress(bytes: ByteArray) {
+        val c = routeChar ?: return
+        if (routeProgressQueued) return
+        routeProgressQueued = true
+        enqueue { g -> routeProgressQueued = false; writeChar(g, c, bytes) }
+    }
+
+    private var routeGen = 0
+
+    /** True once the connected Pulse can show routes (firmware V2.6+). */
+    val supportsRoute: Boolean get() = routeChar != null
 
     /** True once the connected Pulse has the ride/places channels (firmware V2.0+). */
     val supportsRide: Boolean get() = rideInfoChar != null
@@ -208,6 +231,8 @@ class PulseBle(context: Context) {
         commandChar = null
         rideInfoChar = null
         placesChar = null
+        routeChar = null
+        routeProgressQueued = false
         rideInfoQueued = false
         placesQueued = false
         ops.clear()
@@ -276,6 +301,7 @@ class PulseBle(context: Context) {
         commandChar = s.getCharacteristic(PulseUuid.COMMAND)
         rideInfoChar = s.getCharacteristic(PulseUuid.RIDE_INFO)  // null on older firmware
         placesChar = s.getCharacteristic(PulseUuid.PLACES)
+        routeChar = s.getCharacteristic(PulseUuid.ROUTE)  // null before V2.6
 
         val notify = listOf(
             PulseUuid.LIVE, PulseUuid.WHEELIE, PulseUuid.RIDE, PulseUuid.ALL_TIME,
