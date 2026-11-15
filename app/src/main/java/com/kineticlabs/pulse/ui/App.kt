@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
@@ -27,6 +28,7 @@ import com.kineticlabs.pulse.PulseViewModel
 enum class Tab(val label: String, val icon: ImageVector) {
     LIVE("Live", Icons.Filled.Home),
     STATS("Stats", Icons.Filled.Star),
+    CREW("Crew", Icons.Filled.LocationOn),
     HISTORY("History", Icons.AutoMirrored.Filled.List),
     DEVICE("Device", Icons.Filled.Settings),
 }
@@ -61,6 +63,7 @@ fun KineticApp(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBlu
             when (tab) {
                 Tab.LIVE -> LiveScreen(vm, onRequestPermissions, onEnableBluetooth)
                 Tab.STATS -> StatsScreen(vm)
+                Tab.CREW -> CrewScreen(vm)
                 Tab.HISTORY -> HistoryScreen(vm)
                 Tab.DEVICE -> DeviceScreen(vm)
             }

@@ -49,6 +49,7 @@ fun LiveScreen(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBlu
     val ride by vm.ble.ride.collectAsState()
     val all by vm.ble.allTime.collectAsState()
     val summary by vm.summary.collectAsState()
+    val goal by vm.goalSec.collectAsState()
 
     val connected = status == PulseBle.Status.CONNECTED || status == PulseBle.Status.DEMO
     val l = live
@@ -56,8 +57,8 @@ fun LiveScreen(vm: PulseViewModel, onRequestPermissions: () -> Unit, onEnableBlu
     Box(Modifier.fillMaxSize()) {
         when {
             !connected -> ConnectPanel(status, onRequestPermissions, onEnableBluetooth) { vm.ble.setDemo(true) }
-            l != null && l.inWheelie -> WheelieTakeover(l, all?.longestMs ?: 0)
-            else -> IdleLive(l, ride, all, status == PulseBle.Status.DEMO)
+            l != null && l.inWheelie -> WheelieTakeover(l, all?.longestMs ?: 0, goal)
+            else -> IdleLive(l, ride, all, status == PulseBle.Status.DEMO, goal)
         }
 
         val s = summary
@@ -124,7 +125,7 @@ private fun ConnectPanel(
 }
 
 @Composable
-private fun IdleLive(live: LivePacket?, ride: StatsPacket?, all: StatsPacket?, demo: Boolean) {
+private fun IdleLive(live: LivePacket?, ride: StatsPacket?, all: StatsPacket?, demo: Boolean, goalSec: Int) {
     val angle = live?.pitch ?: 0f
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -153,6 +154,13 @@ private fun IdleLive(live: LivePacket?, ride: StatsPacket?, all: StatsPacket?, d
             fontSize = 13.sp, letterSpacing = 2.sp,
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
         )
+        if (goalSec > 0) {
+            Text(
+                "GOAL ${goalSec}s",
+                color = Orange, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center,
+            )
+        }
 
         Spacer(Modifier.weight(1f))
         TileGrid(
@@ -168,9 +176,10 @@ private fun IdleLive(live: LivePacket?, ride: StatsPacket?, all: StatsPacket?, d
 
 /** During a wheelie: the angle is huge, time along the bottom. */
 @Composable
-private fun WheelieTakeover(live: LivePacket, bestMs: Long) {
+private fun WheelieTakeover(live: LivePacket, bestMs: Long, goalSec: Int) {
     val ms = live.wheelieMs
     val record = bestMs == 0L || ms > bestMs
+    val goalHit = goalSec > 0 && ms >= goalSec * 1000L
     Column(
         Modifier.fillMaxSize().background(WheelieBg).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -180,6 +189,17 @@ private fun WheelieTakeover(live: LivePacket, bestMs: Long) {
             color = if (bestMs > 0 && record) Gold else TextMain,
             fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp,
         )
+        if (goalSec > 0) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                if (goalHit) "GOAL ${goalSec}s  ✓" else "GOAL ${goalSec}s",
+                color = if (goalHit) Color.Black else TextMain,
+                fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                modifier = Modifier.clip(RoundedCornerShape(50))
+                    .background(if (goalHit) Go else WheelieTrack)
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
         Spacer(Modifier.weight(1f))
         Text("${live.pitch.roundToInt()}°", fontSize = 150.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.weight(1f))

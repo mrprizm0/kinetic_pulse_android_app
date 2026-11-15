@@ -1,6 +1,7 @@
 package com.kineticlabs.pulse.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +47,8 @@ fun DeviceScreen(vm: PulseViewModel) {
     val name by vm.ble.deviceName.collectAsState()
     val live by vm.ble.live.collectAsState()
     val keepOn by vm.keepScreenOn.collectAsState()
+    val voiceOn by vm.voiceOn.collectAsState()
+    val goal by vm.goalSec.collectAsState()
     val connected = status == PulseBle.Status.CONNECTED || status == PulseBle.Status.DEMO
     val demo = status == PulseBle.Status.DEMO
 
@@ -113,7 +116,28 @@ fun DeviceScreen(vm: PulseViewModel) {
         SectionLabel("App")
         Spacer(Modifier.height(8.dp))
         ToggleRow("Keep screen on", "Handy when the phone is mounted on the bike", keepOn) {
-            vm.keepScreenOn.value = it
+            vm.setKeepScreenOn(it)
+        }
+        Spacer(Modifier.height(8.dp))
+        ToggleRow("Voice callouts", "Counts seconds out loud and calls goals and records", voiceOn) {
+            vm.setVoice(it)
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardBg)
+                .clickable { vm.cycleGoal() }.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Wheelie goal", fontWeight = FontWeight.SemiBold)
+                Text("Tap to change. Buzzes and calls out when you hit it", color = Muted, fontSize = 12.sp)
+            }
+            Text(
+                if (goal == 0) "Off" else "${goal}s",
+                color = Color.Black, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(50)).background(if (goal == 0) Line else Orange)
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            )
         }
         Spacer(Modifier.height(8.dp))
         ToggleRow("Demo mode", "Fake wheelies, to try the app without a Pulse", demo) {
@@ -123,7 +147,7 @@ fun DeviceScreen(vm: PulseViewModel) {
         WideButton("Reconnect", enabled = !demo) { vm.ble.reconnect() }
 
         Spacer(Modifier.height(24.dp))
-        Text("Kinetic Pulse for Android 1.0 · needs Pulse firmware V1.3+", color = Muted, fontSize = 12.sp)
+        Text("Kinetic Pulse for Android 1.1 · needs Pulse firmware V1.3+", color = Muted, fontSize = 12.sp)
     }
 
     if (confirmResetAll) {

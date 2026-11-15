@@ -1,6 +1,8 @@
 package com.kineticlabs.pulse.ui
 
+import android.content.Intent
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,13 +46,24 @@ fun HistoryScreen(vm: PulseViewModel) {
     val history by vm.history.collectAsState()
     var confirmClear by remember { mutableStateOf(false) }
     val fmt = remember { SimpleDateFormat("EEE d MMM, h:mm a", Locale.getDefault()) }
+    val context = LocalContext.current
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(20.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("History", fontSize = 28.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.weight(1f))
-            if (history.isNotEmpty()) TextButton(onClick = { confirmClear = true }) { Text("Clear", color = Red) }
+            if (history.isNotEmpty()) {
+                TextButton(onClick = {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, "Kinetic Pulse wheelies")
+                        putExtra(Intent.EXTRA_TEXT, vm.historyCsv())
+                    }
+                    context.startActivity(Intent.createChooser(send, "Share wheelies (CSV)"))
+                }) { Text("Share") }
+                TextButton(onClick = { confirmClear = true }) { Text("Clear", color = Red) }
+            }
         }
 
         if (history.isEmpty()) {
