@@ -67,6 +67,22 @@ data class RouteUi(
     val progress: RouteProgress? = null,
 )
 
+/** SOS banner on the phone. state uses SosPacket's numbers (0 none, 1 counting, 2 sent, 3 all clear). */
+data class SosUi(
+    val state: Int = 0,
+    val panic: Boolean = true,
+    val secondsLeft: Int = 0,
+    val note: String? = null,
+)
+
+/** Plate-camera alerts, for the app's own display. */
+data class AlprUi(
+    val alert: com.kineticlabs.pulse.alpr.AlprAlert? = null,
+    val mapped: Int = 0,            // cameras on the map around you
+    val waitingForGps: Boolean = true,
+    val error: String? = null,
+)
+
 /** What the post-wheelie summary shows. */
 data class Summary(
     val rec: WheelieRecord,
@@ -106,9 +122,16 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun hasLocationPermission() = RideService.hasLocationPermission(getApplication())
 
+    // Watched by the Ride screen, so it updates the moment you allow location
+    // (a plain function call didn't trigger a redraw, so it kept asking).
+    private val _locationOk = MutableStateFlow(hasLocationPermission())
+    val locationOk: StateFlow<Boolean> = _locationOk
+    fun refreshPermissions() { _locationOk.value = hasLocationPermission() }
+
     fun startRide() {
         if (ride.value.active) return
         RideService.start(getApplication())
+        setStartBattery(-1)  // a new ride: you tap in how full the battery is
         say("Ride started")
     }
 
@@ -197,7 +220,7 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
     private val _route = MutableStateFlow(RouteUi())
     val route: StateFlow<RouteUi> = _route
     private var routeHint = 0
-    private var lastTurnSaid = -1L
+    private var lastTurnSaidAt = -1e9  // where along the route the last spoken turn is (m)
 
     /** A road route from where you are to a spot or rideout. */
     fun routeTo(lat: Double, lon: Double, name: String) {
@@ -230,7 +253,7 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
     private fun startRoute(nav: NavRoute) {
         _route.value = RouteUi(route = nav)
         routeHint = 0
-        lastTurnSaid = -1L
+        lastTurnSaidAt = -1e9
         if (!ride.value.active && hasLocationPermission()) startRide()  // the ride's GPS drives the route
         pushRouteToPulse()
         say("Route started. " + fmtDistanceWords(nav.lengthM))
@@ -260,9 +283,11 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
         _route.value = _route.value.copy(progress = p)
         if (ble.isConnected && !ble.isDemo && ble.supportsRoute) ble.sendRouteProgress(RoutePacket.progress(nav, p))
         // voice: each turn once, ~120 m before it; off route / arrived once when they start
-        val key = (p.alongM + p.nextTurnM).toLong() * 16 + p.nextTurn
-        if (p.nextTurn != 0 && p.nextTurnM < 120 && key != lastTurnSaid && !p.offRoute) {
-            lastTurnSaid = key
+        // (the old key rounded the turn's position to whole metres, and rounding
+        // jitter could make the same turn look new and get said every 2 s)
+        val turnAt = p.alongM + p.nextTurnM
+        if (p.nextTurn != 0 && p.nextTurnM < 120 && kotlin.math.abs(turnAt - lastTurnSaidAt) > 25 && !p.offRoute) {
+            lastTurnSaidAt = turnAt
             say(if (p.nextTurn == 9) "Arriving" else Turn.words(p.nextTurn).replaceFirstChar { it.uppercase() })
         }
         if (p.offRoute && was?.offRoute != true) say("Off route")
@@ -276,12 +301,85 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
     private fun pushRideToPulse() {
         if (!ble.isConnected || ble.isDemo || !ble.supportsRide) return
         val r = ride.value
+        val batt = if (r.active) batteryEstimate.value else null
         ble.sendRideInfo(
             rideInfoBytes(
                 active = r.active, hasFix = r.hasFix, elapsedS = r.elapsedMs() / 1000, distanceM = r.distanceM.toLong(),
                 speedKmh = r.speedMs * 3.6f, topKmh = r.topSpeedMs * 3.6f, wheelies = r.wheelies, bestMs = r.bestWheelieMs,
+                batteryPct = batt?.percent, rangeKm = batt?.rangeKm,
             )
         )
+    }
+
+    // ---- vehicle: scooter / e-moto profile, battery estimate, speed alert, care reminders
+    private val vehicleSettings = com.kineticlabs.pulse.vehicle.VehicleSettings(app)
+    val vehicle = MutableStateFlow(com.kineticlabs.pulse.vehicle.Vehicles.byId(vehicleSettings.modelId))
+    val startBattery = MutableStateFlow(vehicleSettings.startBattery)
+    val speedLimit = MutableStateFlow(vehicleSettings.speedLimit)
+    private val _batteryEstimate = MutableStateFlow<com.kineticlabs.pulse.vehicle.BatteryEstimate?>(null)
+    val batteryEstimate: StateFlow<com.kineticlabs.pulse.vehicle.BatteryEstimate?> = _batteryEstimate
+    val tyreCheckKm = MutableStateFlow(vehicleSettings.tyreCheckKm)
+    val brakeCheckKm = MutableStateFlow(vehicleSettings.brakeCheckKm)
+    private var overLimit = false
+
+    fun setVehicle(id: String) {
+        vehicleSettings.modelId = id
+        vehicle.value = com.kineticlabs.pulse.vehicle.Vehicles.byId(id)
+    }
+
+    fun setStartBattery(pct: Int) {
+        vehicleSettings.startBattery = pct
+        startBattery.value = pct
+        updateBattery()
+    }
+
+    fun cycleSpeedLimit() {
+        val l = com.kineticlabs.pulse.vehicle.VehicleSettings.LIMITS
+        val next = l[(l.indexOf(speedLimit.value) + 1) % l.size]
+        vehicleSettings.speedLimit = next
+        speedLimit.value = next
+    }
+
+    /** All saved rides' distance plus the one in progress, km. */
+    fun odometerKm(): Double = (_rides.value.sumOf { it.distanceM } + (if (ride.value.active) ride.value.distanceM else 0.0)) / 1000
+
+    fun markTyresChecked() { val k = odometerKm(); vehicleSettings.tyreCheckKm = k; tyreCheckKm.value = k }
+    fun markBrakesChecked() { val k = odometerKm(); vehicleSettings.brakeCheckKm = k; brakeCheckKm.value = k }
+
+    private fun updateBattery() {
+        val r = ride.value
+        val avgKmh = if (r.movingMs > 60_000) (r.distanceM / (r.movingMs / 1000.0) * 3.6).toFloat() else 25f
+        _batteryEstimate.value = if (!r.active) null else
+            com.kineticlabs.pulse.vehicle.estimateBattery(vehicle.value, startBattery.value, r.distanceM / 1000, avgKmh)
+    }
+
+    /** Every 2 s: over your speed limit? Amber "slow down" on the Pulse (unless a camera warning is up). */
+    private fun updateSpeedAlert() {
+        val limit = speedLimit.value
+        val r = ride.value
+        val kmh = (r.speedMs * 3.6f).toInt()
+        val over = limit > 0 && r.active && r.hasFix && kmh > limit + 1
+        val canSend = ble.isConnected && !ble.isDemo && ble.supportsAlert && !alprShowing
+        if (over) {
+            val isNew = !overLimit
+            overLimit = true
+            if (canSend) ble.sendAlert(speedAlertBytes(kmh, limit, isNew))
+            if (isNew) { vibrate(short = true); say("Slow down, $kmh") }
+        } else if (overLimit && kmh < limit - 1 || overLimit && limit == 0 || overLimit && !r.active) {
+            overLimit = false
+            if (canSend) ble.sendAlert(com.kineticlabs.pulse.alpr.AlprWatch.packet(null))
+        }
+    }
+
+    /** 000D ALERT, kind 2: distance field = your km/h, "nearby" field = the limit. */
+    private fun speedAlertBytes(kmh: Int, limit: Int, isNew: Boolean): ByteArray {
+        val b = java.nio.ByteBuffer.allocate(26).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        b.put(2); b.put((if (isNew) 1 else 0).toByte())
+        b.putShort(kmh.coerceIn(0, 999).toShort()); b.putShort(0)
+        b.put(limit.coerceIn(0, 255).toByte())
+        val label = "SLOW DOWN".toByteArray(Charsets.US_ASCII).copyOf(19)
+        b.put(label)
+        return b.array()
     }
 
     private fun pushPlacesToPulse() {
@@ -317,6 +415,157 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("voice", v).apply()
         if (v) say("Voice callouts on")
     }
+    // ---- plate-camera (ALPR / Flock) alerts, from the DeFlock / OpenStreetMap map
+    val cameraAlerts = MutableStateFlow(prefs.getBoolean("alpr", false))
+    private val _alpr = MutableStateFlow(AlprUi())
+    val alpr: StateFlow<AlprUi> = _alpr
+    private var alprShowing = false
+
+    fun setCameraAlerts(v: Boolean) {
+        cameraAlerts.value = v
+        prefs.edit().putBoolean("alpr", v).apply()
+        com.kineticlabs.pulse.alpr.AlprWatch.reset()
+        if (!v) clearAlprOnPulse()
+        _alpr.value = AlprUi()
+    }
+
+    private fun clearAlprOnPulse() {
+        alprShowing = false
+        if (ble.isConnected && !ble.isDemo && ble.supportsAlert) ble.sendAlert(com.kineticlabs.pulse.alpr.AlprWatch.packet(null))
+    }
+
+    /** Every 2 s: load the map around you when needed, warn about the nearest camera ahead. */
+    private fun updateAlpr() {
+        if (!cameraAlerts.value) return
+        val w = com.kineticlabs.pulse.alpr.AlprWatch
+        val fix = RideRecorder.lastFix.value
+        if (fix == null || System.currentTimeMillis() - fix.time > 10_000) {
+            if (alprShowing) clearAlprOnPulse()
+            _alpr.value = _alpr.value.copy(alert = null, waitingForGps = true)
+            return
+        }
+        if (w.needsFetch(fix)) viewModelScope.launch {
+            try {
+                w.fetch(fix)
+                _alpr.value = _alpr.value.copy(error = null, mapped = w.cameras.size)
+            } catch (e: com.kineticlabs.pulse.alpr.AlprWatch.AlprException) {
+                _alpr.value = _alpr.value.copy(error = e.message)
+            } catch (_: Exception) {
+                _alpr.value = _alpr.value.copy(error = "Couldn't load the camera map.")
+            }
+        }
+        val heading = if (fix.hasBearing() && fix.hasSpeed() && fix.speed > 2f) fix.bearing else null
+        val a = w.check(fix, heading)
+        _alpr.value = _alpr.value.copy(alert = a, waitingForGps = false, mapped = w.cameras.size)
+        if (a != null) {
+            alprShowing = true
+            if (ble.isConnected && !ble.isDemo && ble.supportsAlert) ble.sendAlert(w.packet(a))
+            if (a.isNew) {
+                vibrate(short = false, best = true)
+                val what = if (a.camera.maker.contains("flock", true)) "Flock camera" else "Plate camera"
+                say("$what ahead, ${(a.distanceM / 10) * 10} metres")
+            }
+        } else if (alprShowing) {
+            clearAlprOnPulse()
+        }
+    }
+
+    // ---- SOS: the Pulse's panic button / crash detection texts your emergency contacts
+    private val ctxApp get() = getApplication<Application>()
+    val sosContacts = MutableStateFlow(com.kineticlabs.pulse.sos.Sos.contacts(app))
+    val riderName = MutableStateFlow(com.kineticlabs.pulse.sos.Sos.riderName(app))
+    private val _sosUi = MutableStateFlow(SosUi())
+    val sosUi: StateFlow<SosUi> = _sosUi
+    private var sosWarnedEvent = -1      // countdown already announced on the phone
+    private var sosSending = -1          // event being texted right now
+
+    fun addSosContact(name: String, number: String) {
+        val c = com.kineticlabs.pulse.sos.Contact(name.trim().ifBlank { number.trim() }, number.trim())
+        val list = (sosContacts.value + c).take(com.kineticlabs.pulse.sos.Sos.MAX_CONTACTS)
+        com.kineticlabs.pulse.sos.Sos.saveContacts(ctxApp, list)
+        sosContacts.value = com.kineticlabs.pulse.sos.Sos.contacts(ctxApp)
+    }
+
+    fun removeSosContact(c: com.kineticlabs.pulse.sos.Contact) {
+        com.kineticlabs.pulse.sos.Sos.saveContacts(ctxApp, sosContacts.value - c)
+        sosContacts.value = com.kineticlabs.pulse.sos.Sos.contacts(ctxApp)
+    }
+
+    fun setRiderName(n: String) {
+        com.kineticlabs.pulse.sos.Sos.saveRiderName(ctxApp, n)
+        riderName.value = com.kineticlabs.pulse.sos.Sos.riderName(ctxApp)
+    }
+
+    /** Texts every contact a test message. Calls back with what happened. */
+    fun sendSosTest(done: (String) -> Unit) {
+        val s = com.kineticlabs.pulse.sos.Sos
+        if (sosContacts.value.isEmpty()) { done("Add a contact first."); return }
+        try {
+            val n = s.sendToAll(ctxApp, sosContacts.value, s.testText(riderName.value))
+            done(if (n > 0) "Test text sent to $n contact${if (n == 1) "" else "s"}." else "Couldn't send. Check your phone has signal.")
+        } catch (_: SecurityException) {
+            done("Allow SMS for Kinetic Pulse first.")
+        }
+    }
+
+    private fun onSos(p: com.kineticlabs.pulse.ble.SosPacket?) {
+        if (p == null) return
+        val s = com.kineticlabs.pulse.sos.Sos
+        val P = com.kineticlabs.pulse.ble.SosPacket
+        when (p.state) {
+            P.COUNTING -> {
+                _sosUi.value = SosUi(state = P.COUNTING, panic = p.isPanic, secondsLeft = p.secondsLeft,
+                    note = "Press any button on the Pulse to cancel.")
+                if (sosWarnedEvent != p.eventId) {
+                    sosWarnedEvent = p.eventId
+                    vibrate(short = false, best = true)
+                    say("S O S in ${p.secondsLeft} seconds. Press any button on the Pulse to cancel.")
+                }
+            }
+            P.SENT -> {
+                val (last, at) = s.lastSentEvent(ctxApp)
+                val already = last == p.eventId && System.currentTimeMillis() - at < 12 * 3_600_000L
+                if (already || sosSending == p.eventId) {
+                    if (_sosUi.value.state != P.SENT) _sosUi.value = SosUi(state = P.SENT, panic = p.isPanic, note = "SOS already sent.")
+                    return
+                }
+                sosSending = p.eventId
+                _sosUi.value = SosUi(state = P.SENT, panic = p.isPanic, note = "Sending SOS…")
+                viewModelScope.launch {
+                    val loc = try { currentLocation() } catch (_: Exception) { null }
+                    val note = when {
+                        sosContacts.value.isEmpty() -> "No emergency contacts set: nobody was texted. Add them on the Device page."
+                        else -> try {
+                            val n = s.sendToAll(ctxApp, sosContacts.value, s.sosText(riderName.value, p.isPanic, loc))
+                            if (n > 0) { s.markSent(ctxApp, p.eventId); "SOS texted to $n contact${if (n == 1) "" else "s"}" + if (loc == null) " (no location)." else " with your location." }
+                            else "Couldn't send the texts. Check your phone has signal."
+                        } catch (_: SecurityException) {
+                            "SMS isn't allowed for Kinetic Pulse, so nobody was texted. Allow it on the Device page."
+                        }
+                    }
+                    sosSending = -1
+                    _sosUi.value = SosUi(state = P.SENT, panic = p.isPanic, note = note)
+                    vibrate(short = false, best = true)
+                    say(if (note.startsWith("SOS texted")) "S O S sent" else "S O S could not be sent")
+                }
+            }
+            P.ALL_CLEAR -> {
+                val (last, _) = s.lastSentEvent(ctxApp)
+                val prefs = ctxApp.getSharedPreferences("sos", Context.MODE_PRIVATE)
+                if (last == p.eventId && prefs.getInt("clear_event", -1) != p.eventId) {
+                    prefs.edit().putInt("clear_event", p.eventId).apply()
+                    try { s.sendToAll(ctxApp, sosContacts.value, s.allClearText(riderName.value)) } catch (_: SecurityException) {}
+                    _sosUi.value = SosUi(state = P.ALL_CLEAR, note = "All clear texted to your contacts.")
+                } else {
+                    _sosUi.value = SosUi()
+                }
+            }
+            else -> if (_sosUi.value.state == P.COUNTING) _sosUi.value = SosUi(state = P.NONE, note = "SOS cancelled.")
+        }
+    }
+
+    fun dismissSosNote() { _sosUi.value = SosUi() }
+
     fun cycleGoal() {
         val i = GOAL_OPTIONS.indexOf(goalSec.value)
         val next = GOAL_OPTIONS[(i + 1) % GOAL_OPTIONS.size]
@@ -336,12 +585,16 @@ class PulseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { ble.wheelies.collect { onWheelie(it) } }
         viewModelScope.launch { ble.tricks.collect { onTrick(it) } }
         viewModelScope.launch { ble.live.collect { onLive(it) } }
+        viewModelScope.launch { ble.sos.collect { onSos(it) } }
         // keep the Pulse's trip screen up to date (and resend spots now and then)
         viewModelScope.launch {
             var n = 0
             while (true) {
+                updateBattery()
                 pushRideToPulse()
                 updateRouteProgress()
+                updateAlpr()
+                updateSpeedAlert()
                 if (n++ % 15 == 0) pushPlacesToPulse()
                 delay(2000)
             }

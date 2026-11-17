@@ -93,9 +93,9 @@ private fun ConnectPanel(
         Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("KINETIC", fontSize = 44.sp, fontWeight = FontWeight.Thin, letterSpacing = 6.sp)
-        Text("LABS · PULSE", style = LabelStyle.copy(color = Orange))
-        Spacer(Modifier.height(56.dp))
+        Text("pulse", fontSize = 64.sp, fontWeight = FontWeight.Thin, letterSpacing = (-1).sp)
+        Text("by kinetic labs", fontSize = 16.sp, fontWeight = FontWeight.Light, color = Orange)
+        Spacer(Modifier.height(48.dp))
 
         val (headline, body) = when (status) {
             PulseBle.Status.NO_PERMISSION ->
@@ -109,7 +109,7 @@ private fun ConnectPanel(
                 CircularProgressIndicator(color = Orange, strokeWidth = 1.5.dp, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(12.dp))
             }
-            Text(headline, fontSize = 18.sp, fontWeight = FontWeight.Light)
+            Text(headline.lowercase(), fontSize = 24.sp, fontWeight = FontWeight.Light)
         }
         Spacer(Modifier.height(6.dp))
         Text(body, color = Muted, fontSize = 14.sp)
@@ -127,16 +127,7 @@ private fun ConnectPanel(
 
 @Composable
 private fun PillButton(text: String, primary: Boolean, onClick: () -> Unit) {
-    Text(
-        text.uppercase(), fontSize = 12.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Medium,
-        color = if (primary) Color.Black else TextMain,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (primary) Orange else Color.Transparent)
-            .border(1.dp, if (primary) Orange else Faint, RoundedCornerShape(50))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 22.dp, vertical = 12.dp),
-    )
+    MetroButton(text, primary = primary, onClick = onClick)
 }
 
 @Composable
@@ -144,7 +135,7 @@ private fun IdleLive(live: LivePacket?, ride: StatsPacket?, all: StatsPacket?, d
     val angle = live?.pitch ?: 0f
     Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(6.dp).clip(CircleShape).background(if (demo) Gold else Go))
+            StatusSquare(if (demo) Gold else Go)
             Spacer(Modifier.size(8.dp))
             Text(if (demo) "DEMO" else "CONNECTED", style = LabelStyle)
             Spacer(Modifier.weight(1f))
@@ -173,9 +164,9 @@ private fun IdleLive(live: LivePacket?, ride: StatsPacket?, all: StatsPacket?, d
         Spacer(Modifier.weight(1f))
         TileGrid(
             listOf(
-                Tile("This ride", "${ride?.count ?: 0}"),
+                Tile("This ride", "${ride?.count ?: 0}", bg = Orange),
                 Tile("Ride best", ride?.let { fmtSecs(it.longestMs) } ?: DASH),
-                Tile("Best ever", all?.let { fmtSecs(it.longestMs) } ?: DASH, Orange),
+                Tile("Best ever", all?.let { fmtSecs(it.longestMs) } ?: DASH, bg = TileBlue),
                 Tile("Highest", all?.let { "${it.highest.roundToInt()}°" } ?: DASH),
             ),
         )
@@ -213,7 +204,7 @@ private fun TrickTakeover(
             Text(
                 if (goalHit) "GOAL ${goalSec}s ✓" else "GOAL ${goalSec}s",
                 style = LabelStyle.copy(color = if (goalHit) Go else Muted),
-                modifier = Modifier.border(1.dp, if (goalHit) Go else Faint, RoundedCornerShape(50))
+                modifier = Modifier.border(1.dp, if (goalHit) Go else Faint)
                     .padding(horizontal = 12.dp, vertical = 5.dp),
             )
         }
@@ -266,12 +257,12 @@ private fun SummaryOverlay(s: Summary, onDismiss: () -> Unit) {
         else -> DASH
     }
     val land = landingScore(r.landingG)
-    val turnsText = String.format("%.1fx %s", kotlin.math.abs(r.turns), if (r.turns > 0) "L" else "R")
+    val turnsText = String.format(java.util.Locale.US, "%.1fx %s", kotlin.math.abs(r.turns), if (r.turns > 0) "L" else "R")
 
     val title = when {
         stoppie && best -> "BEST STOPPIE"
         stoppie -> "STOPPIE  ·  #${s.number}"
-        circle -> String.format("WHEELIE CIRCLE  ·  %.1fx", kotlin.math.abs(r.turns))
+        circle -> String.format(java.util.Locale.US, "WHEELIE CIRCLE  ·  %.1fx", kotlin.math.abs(r.turns))
         best -> "NEW BEST"
         else -> "WHEELIE  ·  #${s.number}"
     }
@@ -283,16 +274,16 @@ private fun SummaryOverlay(s: Summary, onDismiss: () -> Unit) {
     // the time is the hero; everything else sits quietly underneath
     val tiles = if (stoppie) listOf(
         Tile("Depth", "${r.peak.roundToInt()}°"),
-        Tile("Balance", "${r.balance}", scoreColor(r.balance)),
+        Tile("Balance", "${r.balance}", bg = scoreTile(r.balance)),
         Tile("Vs best", vsBest, if (best) Gold else TextMain),
         Tile("Rank", "#${s.rank}", if (s.rank == 1) Gold else TextMain),
         Tile("Session", fmtSecs(s.sessionTotalMs)),
     ) else listOf(
         Tile("Peak", "${r.peak.roundToInt()}°"),
         Tile("Average", "${r.avg.roundToInt()}°"),
-        Tile("Balance", "${r.balance}", scoreColor(r.balance)),
+        Tile("Balance", "${r.balance}", bg = scoreTile(r.balance)),
         Tile("Pop", "${r.pop}", sub = "°/s"),
-        Tile("Landing", "$land", scoreColor(land), String.format("%.1fg", r.landingG)),
+        Tile("Landing", "$land", sub = String.format(java.util.Locale.US, "%.1fg", r.landingG), bg = scoreTile(land)),
         Tile("Vs best", vsBest, if (best) Gold else TextMain),
         if (circle) Tile("Turns", turnsText, Gold) else Tile("Rank", "#${s.rank}", if (s.rank == 1) Gold else TextMain),
         Tile("Session", fmtSecs(s.sessionTotalMs)),
@@ -305,20 +296,20 @@ private fun SummaryOverlay(s: Summary, onDismiss: () -> Unit) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                 .background(CardBg)
-                .border(1.dp, Line, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
                 .padding(horizontal = 24.dp, vertical = 22.dp)
         ) {
-            Box(Modifier.align(Alignment.CenterHorizontally).size(width = 36.dp, height = 3.dp).clip(RoundedCornerShape(50)).background(Faint))
-            Spacer(Modifier.height(18.dp))
-            Text(title, style = LabelStyle.copy(color = titleColor, fontSize = 11.sp, letterSpacing = 3.sp))
+            Text(title.lowercase(), fontSize = 22.sp, fontWeight = FontWeight.Light, color = titleColor)
             Text(fmtSecs(r.ms), style = numberStyle(72.sp), color = if (best) Gold else TextMain)
-            Spacer(Modifier.height(6.dp))
-            Hairline()
-            TileGrid(columns = 3, tiles = tiles)
             Spacer(Modifier.height(10.dp))
-            Text("TAP TO CLOSE", style = LabelStyle.copy(color = Faint), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            TileGrid(columns = 3, tiles = tiles)
+            Spacer(Modifier.height(14.dp))
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                MetroButton("share", primary = true) { com.kineticlabs.pulse.share.ShareCard.shareTrick(ctx, r) }
+                Spacer(Modifier.weight(1f))
+                Text("tap outside to close", color = Faint, fontSize = 13.sp)
+            }
         }
     }
 }

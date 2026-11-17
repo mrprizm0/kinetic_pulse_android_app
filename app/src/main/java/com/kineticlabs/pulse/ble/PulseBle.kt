@@ -83,6 +83,9 @@ class PulseBle(context: Context) {
     val wheelies: SharedFlow<WheelieEvent> = _wheelies
     private val _tricks = MutableSharedFlow<TrickPacket>(extraBufferCapacity = 16)
     val tricks: SharedFlow<TrickPacket> = _tricks
+    private val _sos = MutableStateFlow<SosPacket?>(null)
+    /** SOS state from the Pulse (null = never heard / older firmware). */
+    val sos: StateFlow<SosPacket?> = _sos
 
     val isDemo: Boolean get() = _status.value == Status.DEMO
     val isConnected: Boolean get() = _status.value == Status.CONNECTED || isDemo
@@ -92,6 +95,8 @@ class PulseBle(context: Context) {
     private var rideInfoChar: BluetoothGattCharacteristic? = null
     private var placesChar: BluetoothGattCharacteristic? = null
     private var routeChar: BluetoothGattCharacteristic? = null
+    private var alertChar: BluetoothGattCharacteristic? = null
+    private var alertQueued = false
     private var routeProgressQueued = false
     private var rideInfoQueued = false
     private var placesQueued = false
@@ -99,6 +104,31 @@ class PulseBle(context: Context) {
     private var wanted = false
     private val ops = ArrayDeque<(BluetoothGatt) -> Boolean>()
     private var opBusy = false
+    private var opSeq = 0  // bumps every op, so a late timeout can't finish the wrong one
+
+    // Bluetooth switched on or off in quick settings: follow it, no app restart needed.
+    private val adapterReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context, i: android.content.Intent) {
+            when (i.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, -1)) {
+                android.bluetooth.BluetoothAdapter.STATE_ON -> main.post { if (wanted && !isDemo) start() }
+                android.bluetooth.BluetoothAdapter.STATE_OFF -> main.post {
+                    if (isDemo) return@post
+                    stopScan(); disconnect(); _live.value = null
+                    _status.value = Status.BLUETOOTH_OFF
+                }
+            }
+        }
+    }
+
+    init {
+        try {
+            ContextCompat.registerReceiver(
+                ctx, adapterReceiver,
+                android.content.IntentFilter(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        } catch (_: Exception) {}
+    }
 
     // ---------------------------------------------------------------- public
 
@@ -116,11 +146,13 @@ class PulseBle(context: Context) {
         startScan()
     }
 
+    /** For good: only when the app's view model goes away. */
     fun stop() {
         wanted = false
         stopScan()
         disconnect()
         demoJob?.cancel()
+        try { ctx.unregisterReceiver(adapterReceiver) } catch (_: Exception) {}
     }
 
     fun reconnect() {
@@ -162,6 +194,17 @@ class PulseBle(context: Context) {
     }
 
     private var routeGen = 0
+
+    /** Plate-camera warning for the Pulse. Skipped if the last one hasn't gone out yet. */
+    fun sendAlert(bytes: ByteArray) {
+        val c = alertChar ?: return
+        if (alertQueued) return
+        alertQueued = true
+        enqueue { g -> alertQueued = false; writeChar(g, c, bytes) }
+    }
+
+    /** True once the connected Pulse can show camera warnings (firmware V2.9+). */
+    val supportsAlert: Boolean get() = alertChar != null
 
     /** True once the connected Pulse can show routes (firmware V2.6+). */
     val supportsRoute: Boolean get() = routeChar != null
@@ -221,6 +264,10 @@ class PulseBle(context: Context) {
         _status.value = Status.CONNECTING
         _deviceName.value = device.name ?: "Kinetic Pulse"
         gatt = device.connectGatt(ctx, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        if (gatt == null) {  // the stack refused: go back to looking instead of "connecting" forever
+            _status.value = Status.SCANNING
+            main.postDelayed({ if (wanted && gatt == null && !isDemo) start() }, 1500)
+        }
     }
 
     private fun disconnect() {
@@ -232,6 +279,8 @@ class PulseBle(context: Context) {
         rideInfoChar = null
         placesChar = null
         routeChar = null
+        alertChar = null
+        alertQueued = false
         routeProgressQueued = false
         rideInfoQueued = false
         placesQueued = false
@@ -261,11 +310,20 @@ class PulseBle(context: Context) {
             val op = ops.removeFirstOrNull()
             if (op == null) { opBusy = false; return }
             opBusy = true
-            if (op(g)) return  // wait for its callback; otherwise skip to the next one
+            val started = try { op(g) } catch (_: Exception) { false }
+            if (started) {
+                // wait for its callback, but never forever: a lost callback used to
+                // jam the queue, and after that nothing reached the Pulse until reconnect
+                val seq = ++opSeq
+                main.postDelayed({ if (opBusy && seq == opSeq) opDone() }, 3000)
+                return
+            }
+            // couldn't start: skip to the next one
         }
     }
 
     private fun opDone() {
+        opSeq++
         opBusy = false
         nextOp()
     }
@@ -302,10 +360,11 @@ class PulseBle(context: Context) {
         rideInfoChar = s.getCharacteristic(PulseUuid.RIDE_INFO)  // null on older firmware
         placesChar = s.getCharacteristic(PulseUuid.PLACES)
         routeChar = s.getCharacteristic(PulseUuid.ROUTE)  // null before V2.6
+        alertChar = s.getCharacteristic(PulseUuid.ALERT)  // null before V2.9
 
         val notify = listOf(
             PulseUuid.LIVE, PulseUuid.WHEELIE, PulseUuid.RIDE, PulseUuid.ALL_TIME,
-            PulseUuid.RIDE_EXTRA, PulseUuid.ALL_TIME_EXTRA, PulseUuid.TRICK,
+            PulseUuid.RIDE_EXTRA, PulseUuid.ALL_TIME_EXTRA, PulseUuid.TRICK, PulseUuid.SOS,
         )
         for (u in notify) {
             val c = s.getCharacteristic(u) ?: continue
@@ -314,6 +373,7 @@ class PulseBle(context: Context) {
         val read = listOf(
             PulseUuid.RIDE, PulseUuid.ALL_TIME, PulseUuid.RIDE_EXTRA,
             PulseUuid.ALL_TIME_EXTRA, PulseUuid.LIVE,
+            PulseUuid.SOS,  // an SOS sent while the phone was away gets picked up here
         )
         for (u in read) {
             val c = s.getCharacteristic(u) ?: continue
@@ -333,6 +393,7 @@ class PulseBle(context: Context) {
             PulseUuid.RIDE_EXTRA -> StatsExtraPacket.parse(v)?.let { _rideExtra.value = it }
             PulseUuid.ALL_TIME_EXTRA -> StatsExtraPacket.parse(v)?.let { _allTimeExtra.value = it }
             PulseUuid.TRICK -> TrickPacket.parse(v)?.let { _tricks.tryEmit(it) }
+            PulseUuid.SOS -> SosPacket.parse(v)?.let { _sos.value = it }
         }
     }
 
@@ -342,7 +403,10 @@ class PulseBle(context: Context) {
             main.post {
                 if (g != gatt) { try { g.close() } catch (_: Exception) {}; return@post }
                 if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                    if (!g.requestMtu(185)) g.discoverServices()
+                    servicesAsked = false
+                    if (!g.requestMtu(185)) askServices(g)
+                    // some phones never answer the MTU request: carry on without it
+                    else main.postDelayed({ if (g == gatt) askServices(g) }, 1500)
                 } else {
                     disconnect()
                     _live.value = null
@@ -355,19 +419,23 @@ class PulseBle(context: Context) {
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            main.post { if (g == gatt) g.discoverServices() }
+            main.post { if (g == gatt) askServices(g) }
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            main.post { if (g == gatt) setup(g) }
+            main.post {
+                if (g != gatt) return@post
+                if (status == BluetoothGatt.GATT_SUCCESS) setup(g) else g.disconnect()
+            }
         }
 
+        // only finish the op if it belongs to the connection we're on now
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-            main.post { opDone() }
+            main.post { if (g == gatt) opDone() }
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
-            main.post { opDone() }
+            main.post { if (g == gatt) opDone() }
         }
 
         // Android 13+
@@ -376,6 +444,7 @@ class PulseBle(context: Context) {
         ) {
             val u = c.uuid
             main.post {
+                if (g != gatt) return@post
                 if (status == BluetoothGatt.GATT_SUCCESS) handle(u, value)
                 opDone()
             }
@@ -389,6 +458,7 @@ class PulseBle(context: Context) {
             val v = c.value?.copyOf() ?: ByteArray(0)
             val u = c.uuid
             main.post {
+                if (g != gatt) return@post
                 if (status == BluetoothGatt.GATT_SUCCESS) handle(u, v)
                 opDone()
             }
@@ -399,7 +469,7 @@ class PulseBle(context: Context) {
             g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray,
         ) {
             val u = c.uuid
-            main.post { handle(u, value) }
+            main.post { if (g == gatt) handle(u, value) }
         }
 
         // Android 12 and older
@@ -409,8 +479,15 @@ class PulseBle(context: Context) {
             if (Build.VERSION.SDK_INT >= 33) return
             val v = c.value?.copyOf() ?: return
             val u = c.uuid
-            main.post { handle(u, v) }
+            main.post { if (g == gatt) handle(u, v) }
         }
+    }
+
+    private var servicesAsked = false
+    private fun askServices(g: BluetoothGatt) {
+        if (servicesAsked) return  // MTU answer and the fallback timer can both get here
+        servicesAsked = true
+        if (!g.discoverServices()) g.disconnect()
     }
 
     // ------------------------------------------------------------- demo mode

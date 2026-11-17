@@ -25,6 +25,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- nearby spots and rideouts come from the Kinetic Labs website -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- SOS: texts your emergency contacts when the Pulse sends a panic / crash alert -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <!-- needed on Android 11+ to find the phone's text-to-speech engine -->
@@ -52,5 +55,15 @@
             android:name=".ride.RideService"
             android:exported="false"
             android:foregroundServiceType="location" />
+        <!-- hands share cards and GPX files to other apps -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.share"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/share_paths" />
+        </provider>
     </application>
 </manifest>

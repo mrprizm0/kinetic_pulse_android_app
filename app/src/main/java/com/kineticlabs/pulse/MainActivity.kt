@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
 
     // location for ride tracking + spots; notifications for the "ride in progress" note
     private val askLocation =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { vm.refreshPermissions() }
     private val locationPermissions: Array<String> = buildList {
         add(android.Manifest.permission.ACCESS_FINE_LOCATION)
         add(android.Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        vm.refreshPermissions()  // may have changed in system settings
         if (vm.ble.hasPermissions()) vm.ble.start()
         else askPermissions.launch(PulseBle.requiredPermissions)
     }

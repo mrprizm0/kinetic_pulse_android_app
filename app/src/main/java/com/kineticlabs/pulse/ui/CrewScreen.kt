@@ -106,7 +106,7 @@ fun CrewScreen(vm: PulseViewModel) {
                 Modifier.fillMaxWidth().rowDivider().padding(bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(Red))
+                StatusSquare(Red)
                 Spacer(Modifier.size(10.dp))
                 Text(msg, color = Red, fontSize = 14.sp, modifier = Modifier.weight(1f))
                 if (mp == null) {
@@ -121,8 +121,7 @@ fun CrewScreen(vm: PulseViewModel) {
 
         // ---- the mini-map
         Box(
-            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(28.dp))
-                .border(1.dp, Line, RoundedCornerShape(28.dp))
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(androidx.compose.ui.graphics.RectangleShape)
         ) {
             MiniMap(sim, ZOOMS[zoomIdx], selected, Modifier.fillMaxSize())
             Column(Modifier.align(Alignment.BottomEnd).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -147,7 +146,7 @@ fun CrewScreen(vm: PulseViewModel) {
                 "REGROUP AT MY SPOT",
                 fontSize = 12.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Medium, color = Color.Black,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(Orange)
+                modifier = Modifier.fillMaxWidth().background(Orange)
                     .clickable { sim.regroup() }.padding(vertical = 14.dp),
             )
         } else {
@@ -183,7 +182,7 @@ fun CrewScreen(vm: PulseViewModel) {
         Spacer(Modifier.height(6.dp))
         sim.feed.take(10).forEach { f ->
             Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(4.dp).clip(CircleShape).background(f.color))
+                StatusSquare(f.color, 5)
                 Spacer(Modifier.size(12.dp))
                 Text(f.text, fontSize = 13.sp, color = TextMain.copy(alpha = 0.85f), modifier = Modifier.weight(1f))
                 Text(ago(sim.time - f.time).uppercase(), style = LabelStyle.copy(color = Faint))
@@ -195,8 +194,8 @@ fun CrewScreen(vm: PulseViewModel) {
 @Composable
 private fun MapButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(38.dp).clip(CircleShape).background(Color(0xCC000000))
-            .border(1.dp, Faint, CircleShape)
+        Modifier.size(38.dp).background(Color(0xCC000000))
+            .border(2.dp, Faint)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -379,9 +378,9 @@ private fun RiderCard(r: Rider, you: Rider, meet: Offset?, selected: Boolean, on
     ) {
         // coloured ring, filled when selected
         Box(
-            Modifier.size(30.dp).clip(CircleShape)
+            Modifier.size(30.dp)
                 .background(if (selected) r.color else Color.Transparent)
-                .border(1.5.dp, r.color, CircleShape),
+                .border(2.dp, r.color),
             contentAlignment = Alignment.Center,
         ) {
             Text(

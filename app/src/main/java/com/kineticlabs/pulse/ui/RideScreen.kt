@@ -72,13 +72,14 @@ private val RideoutColor = Color(0xFFC97800)
 @Composable
 fun RideScreen(vm: PulseViewModel, onRequestLocation: () -> Unit) {
     var spotsTab by rememberSaveable { mutableStateOf(false) }
+    val locationOk by vm.locationOk.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 20.dp)) {
         ScreenTitle("Ride")
         Spacer(Modifier.height(14.dp))
         SegmentToggle("Track", "Spots", spotsTab) { spotsTab = it }
         Spacer(Modifier.height(20.dp))
-        if (vm.hasLocationPermission()) RouteCard(vm)
-        if (!vm.hasLocationPermission()) {
+        if (locationOk) { AlprCard(vm); RouteCard(vm) }
+        if (!locationOk) {
             Text("Ride tracking and nearby spots need your location.", fontSize = 16.sp, fontWeight = FontWeight.Light)
             Spacer(Modifier.height(6.dp))
             Text("It's only used on this phone, and to look up spots near you. Your route is never uploaded.", color = Muted, fontSize = 13.sp)
@@ -90,6 +91,78 @@ fun RideScreen(vm: PulseViewModel, onRequestLocation: () -> Unit) {
     }
 }
 
+
+// ------------------------------------------------------------- battery (scooters)
+
+/** During a ride with a vehicle set: tap how full the battery was, see the estimate. */
+@Composable
+private fun BatteryPanel(vm: PulseViewModel) {
+    val v by vm.vehicle.collectAsState()
+    if (v.batteryWh <= 0) return
+    val start by vm.startBattery.collectAsState()
+    val est by vm.batteryEstimate.collectAsState()
+    Spacer(Modifier.height(6.dp))
+    if (start < 0) {
+        Column(Modifier.fillMaxWidth().background(TileAmber).padding(12.dp)) {
+            Text("how full was the battery?", fontSize = 18.sp, fontWeight = FontWeight.Light, color = TextMain)
+            Text("For the ${v.name}'s range estimate.", fontSize = 12.sp, color = TextMain.copy(alpha = .8f))
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(100, 80, 60, 40, 20).forEach { p ->
+                    Text("$p%", fontSize = 15.sp, color = TextMain,
+                        modifier = Modifier.weight(1f).border(2.dp, TextMain).clickable { vm.setStartBattery(p) }
+                            .padding(vertical = 8.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
+            }
+        }
+    } else if (est != null) {
+        val e = est!!
+        TileGrid(
+            columns = 3,
+            tiles = listOf(
+                Tile("Battery (est.)", "${e.percent}%", bg = if (e.percent <= 15) TileRed else if (e.percent <= 30) TileAmber else TileGreen),
+                Tile("Range left", "${e.rangeKm.roundToInt()}", sub = "km"),
+                Tile("Started at", "$start%"),
+            ),
+        )
+        Text("Estimated from the ${v.name}'s battery and how far and fast you've ridden. Tap \"started at\" again on the Device page if it's off.",
+            color = Faint, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+// ------------------------------------------------------------- plate cameras
+
+/** While camera alerts are on: a red tile when one's ahead, a quiet status line otherwise. */
+@Composable
+private fun AlprCard(vm: PulseViewModel) {
+    val on by vm.cameraAlerts.collectAsState()
+    if (!on) return
+    val ui by vm.alpr.collectAsState()
+    val ride by vm.ride.collectAsState()
+    val a = ui.alert
+    if (a != null) {
+        Column(Modifier.fillMaxWidth().background(TileRed).padding(14.dp)) {
+            Text(
+                if (a.camera.maker.contains("flock", true)) "flock camera ahead" else "plate camera ahead",
+                fontSize = 22.sp, fontWeight = FontWeight.Light, color = TextMain,
+            )
+            Text(fmtKm(a.distanceM.toDouble()), style = numberStyle(48.sp, FontWeight.Light), color = TextMain)
+            Text(
+                (if (a.nearbyCount > 1) "${a.nearbyCount} cameras within 1 km · " else "") + "map: DeFlock / OpenStreetMap",
+                fontSize = 12.sp, color = TextMain.copy(alpha = .75f),
+            )
+        }
+    } else {
+        val line = when {
+            ui.error != null -> ui.error!!
+            !ride.active -> "Camera alerts are on. Start a ride so the app can follow where you're going."
+            ui.waitingForGps -> "Camera alerts: waiting for GPS…"
+            else -> "Camera alerts: ${ui.mapped} mapped cameras within 15 km, none ahead."
+        }
+        Text(line, color = if (ui.error != null) Red else Muted, fontSize = 13.sp)
+    }
+    Spacer(Modifier.height(14.dp))
+}
 
 // ------------------------------------------------------------------- route (beta)
 
@@ -109,9 +182,9 @@ private fun RouteCard(vm: PulseViewModel) {
     }
     val nav = ui.route ?: return
     val p = ui.progress
-    Column(Modifier.fillMaxWidth().background(CardBg).border(1.dp, if (p?.offRoute == true) Red else Line).padding(14.dp)) {
+    Column(Modifier.fillMaxWidth().background(if (p?.offRoute == true) TileRed else TileBg).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("ROUTE", style = LabelStyle.copy(color = Orange))
+            Text("route", fontSize = 18.sp, fontWeight = FontWeight.Light, color = Orange)
             Spacer(Modifier.width(8.dp))
             Text("BETA", style = LabelStyle.copy(color = Color.Black, fontSize = 9.sp),
                 modifier = Modifier.background(Gold).padding(horizontal = 5.dp, vertical = 1.dp))
@@ -128,7 +201,7 @@ private fun RouteCard(vm: PulseViewModel) {
             p.nextTurn != 0 -> "${fmtKm(p.leftM)} to go · ${Turn.words(p.nextTurn)} in ${fmtKm(p.nextTurnM)}"
             else -> "${fmtKm(p.leftM)} to go"
         }
-        Text(line, color = if (p?.offRoute == true) Red else Muted, fontSize = 13.sp)
+        Text(line, color = if (p?.offRoute == true) TextMain else Muted, fontSize = 13.sp)
         Spacer(Modifier.height(10.dp))
         RouteCanvas(nav.points, Modifier.fillMaxWidth().aspectRatio(2.2f),
             you = p?.let { nav.points[it.index.coerceIn(0, nav.points.size - 1)] })
@@ -154,7 +227,7 @@ private fun TrackPanel(vm: PulseViewModel) {
 
     if (r.active) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).background(if (r.hasFix) Go else Gold))
+            StatusSquare(if (r.hasFix) Go else Gold, 8)
             Spacer(Modifier.width(8.dp))
             Text(if (r.hasFix) "RECORDING" else "WAITING FOR GPS", style = LabelStyle.copy(color = if (r.hasFix) Go else Gold))
         }
@@ -167,11 +240,12 @@ private fun TrackPanel(vm: PulseViewModel) {
                 Tile("Distance", fmtKm(r.distanceM)),
                 Tile("Speed", "${(r.speedMs * 3.6f).roundToInt()}", sub = "km/h"),
                 Tile("Top", "${(r.topSpeedMs * 3.6f).roundToInt()}", sub = "km/h"),
-                Tile("Wheelies", "${r.wheelies}", Orange),
+                Tile("Wheelies", "${r.wheelies}", bg = Orange),
                 Tile("Best", if (r.bestWheelieMs > 0) fmtSecs(r.bestWheelieMs) else DASH),
                 Tile("Avg", "${(r.avgMovingMs * 3.6f).roundToInt()}", sub = "km/h"),
             ),
         )
+        BatteryPanel(vm)
         Spacer(Modifier.height(14.dp))
         RouteCanvas(r.route.map { it.lat to it.lon }, Modifier.fillMaxWidth().aspectRatio(1.6f))
         Spacer(Modifier.height(18.dp))
@@ -179,7 +253,7 @@ private fun TrackPanel(vm: PulseViewModel) {
         Spacer(Modifier.height(8.dp))
         Text("Your Pulse shows this on its trip screen while it's connected.", color = Muted, fontSize = 12.sp)
     } else {
-        Text("Track a ride", fontSize = 22.sp, fontWeight = FontWeight.Light)
+        Text("track a ride", fontSize = 28.sp, fontWeight = FontWeight.Light)
         Spacer(Modifier.height(4.dp))
         Text("Time, distance, speed and your route, with every wheelie counted along the way. Keeps going with the screen off.",
             color = Muted, fontSize = 13.sp)
@@ -222,8 +296,14 @@ private fun RideRow(r: SavedRide, date: String, expanded: Boolean, onClick: () -
             TileGrid(columns = 3, tiles = listOf(
                 Tile("Moving", fmtClock(r.movingMs)),
                 Tile("Avg", "${(r.avgMovingMs * 3.6f).roundToInt()}", sub = "km/h"),
-                Tile("Best", if (r.bestWheelieMs > 0) fmtSecs(r.bestWheelieMs) else DASH, Orange),
+                Tile("Best", if (r.bestWheelieMs > 0) fmtSecs(r.bestWheelieMs) else DASH, bg = TileBlue),
             ))
+            Spacer(Modifier.height(10.dp))
+            val ctx = LocalContext.current
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                MetroButton("share", Modifier.weight(1f), primary = true) { com.kineticlabs.pulse.share.ShareCard.shareRide(ctx, r) }
+                if (r.path.size >= 2) MetroButton("gpx", Modifier.weight(1f)) { com.kineticlabs.pulse.share.ShareCard.shareGpx(ctx, r) }
+            }
             Row {
                 if (r.path.size >= 2) TextButton(onClick = onFollow) { Text("FOLLOW ON PULSE · BETA", style = LabelStyle.copy(color = Orange)) }
                 Spacer(Modifier.weight(1f))
@@ -236,7 +316,7 @@ private fun RideRow(r: SavedRide, date: String, expanded: Boolean, onClick: () -
 /** The route as a line, scaled to fit. No map tiles: just the shape of where you went. */
 @Composable
 private fun RouteCanvas(path: List<Pair<Double, Double>>, modifier: Modifier, you: Pair<Double, Double>? = null) {
-    Box(modifier.background(CardBg).border(1.dp, Line), contentAlignment = Alignment.Center) {
+    Box(modifier.background(TileBg), contentAlignment = Alignment.Center) {
         if (path.size < 2) {
             Text("route appears once you start moving", color = Faint, fontSize = 12.sp)
             return@Box
@@ -275,7 +355,7 @@ private fun SpotsPanel(vm: PulseViewModel) {
     LaunchedEffect(Unit) { if (ui.updatedAt == 0L || System.currentTimeMillis() - ui.updatedAt > 600_000) vm.refreshSpots() }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Places to ride near you", fontSize = 18.sp, fontWeight = FontWeight.Light, modifier = Modifier.weight(1f))
+        Text("places near you", fontSize = 24.sp, fontWeight = FontWeight.Light, modifier = Modifier.weight(1f))
         Text(if (ui.loading) "LOADING…" else "REFRESH", style = LabelStyle.copy(color = if (ui.loading) Faint else Orange),
             modifier = Modifier.clickable(enabled = !ui.loading) { vm.refreshSpots() }.padding(8.dp))
     }
@@ -344,7 +424,7 @@ private fun RideoutRow(r: Rideout, whenText: String, onRoute: () -> Unit, onClic
 private fun SpotRow(s: Spot, onRoute: () -> Unit, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().rowDivider().clickable(onClick = onClick).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(28.dp).background(if (s.motorsOk) SpotMotor else SpotNoMotor), contentAlignment = Alignment.Center) {
-            Text(s.kind.first().uppercase(), color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text((s.kind.firstOrNull() ?: 'S').uppercase(), color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -407,11 +487,15 @@ private fun PostRideoutDialog(vm: PulseViewModel, close: () -> Unit) {
         },
         confirmButton = {
             TextButton(enabled = !busy && title.trim().length >= 3, onClick = {
-                busy = true; error = null
                 val cal = Calendar.getInstance().apply {
                     add(Calendar.DAY_OF_YEAR, day); set(Calendar.HOUR_OF_DAY, hour.roundToInt())
                     set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
                 }
+                if (cal.timeInMillis < System.currentTimeMillis()) {  // today, but that hour has gone
+                    error = "That time has already passed. Pick a later hour or another day."
+                    return@TextButton
+                }
+                busy = true; error = null
                 vm.postRideout(title.trim(), note.trim(), cal.timeInMillis) { err ->
                     busy = false
                     if (err == null) close() else error = err
@@ -426,15 +510,7 @@ private fun PostRideoutDialog(vm: PulseViewModel, close: () -> Unit) {
 
 @Composable
 private fun Pill(text: String, primary: Boolean, danger: Boolean = false, onClick: () -> Unit) {
-    val c = if (danger) Red else Orange
-    Text(
-        text.uppercase(), fontSize = 13.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Medium,
-        color = if (primary) Color.Black else (if (danger) Red else TextMain),
-        modifier = Modifier.fillMaxWidth().background(if (primary) c else Color.Transparent, RoundedCornerShape(50))
-            .border(1.dp, if (primary) c else (if (danger) Red else Faint), RoundedCornerShape(50))
-            .clickable(onClick = onClick).padding(vertical = 15.dp),
-        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-    )
+    MetroButton(text, Modifier.fillMaxWidth(), primary = primary || danger, color = if (danger) TileRed else Orange, onClick = onClick)
 }
 
 private fun openMap(ctx: android.content.Context, lat: Double, lon: Double, label: String) {

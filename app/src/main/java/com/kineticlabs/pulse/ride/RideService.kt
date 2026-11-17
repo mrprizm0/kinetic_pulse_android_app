@@ -67,11 +67,17 @@ class RideService : Service() {
             .setOngoing(true)
             .setContentIntent(open)
             .build()
-        ServiceCompat.startForeground(
-            this, NOTE_ID, note,
-            if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0,
-        )
-        if (!hasLocationPermission(this)) { stopSelf(); return START_NOT_STICKY }
+        try {
+            ServiceCompat.startForeground(
+                this, NOTE_ID, note,
+                if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0,
+            )
+        } catch (_: Exception) {  // e.g. location permission taken away: don't crash, just stop
+            stopSelf(); return START_NOT_STICKY
+        }
+        // Android restarted us after killing the app: there's no ride in memory any
+        // more, so don't sit there with a "ride in progress" notice recording nothing.
+        if (!hasLocationPermission(this) || !RideRecorder.state.value.active) { stopSelf(); return START_NOT_STICKY }
         if (lm == null) {
             lm = getSystemService(LocationManager::class.java)
             try {
@@ -80,7 +86,7 @@ class RideService : Service() {
                 stopSelf()
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {

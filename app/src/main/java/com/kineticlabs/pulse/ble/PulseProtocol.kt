@@ -25,6 +25,10 @@ object PulseUuid {
     val PLACES: UUID = make(11)
     /** phone -> Pulse: a route to follow (beta, firmware V2.6+) */
     val ROUTE: UUID = make(12)
+    /** phone -> Pulse: plate-camera (ALPR) warning (firmware V2.9+) */
+    val ALERT: UUID = make(13)
+    /** Pulse -> phone: SOS (panic button / crash detected), firmware V3.0+ */
+    val SOS: UUID = make(14)
 
     /** Standard "turn notifications on" descriptor. */
     val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -71,6 +75,21 @@ enum class TrickKind(val code: Int) {
 
     companion object {
         fun of(code: Int) = entries.firstOrNull { it.code == code } ?: WHEELIE
+    }
+}
+
+/**
+ * 000E SOS: state 0 none, 1 counting down, 2 SENT (text the contacts),
+ * 3 all clear after a sent one; reason 1 panic, 2 crash; event id per SOS.
+ */
+data class SosPacket(val state: Int, val reason: Int, val secondsLeft: Int, val eventId: Int) {
+    val isPanic: Boolean get() = reason == 1
+    companion object {
+        const val NONE = 0; const val COUNTING = 1; const val SENT = 2; const val ALL_CLEAR = 3
+        fun parse(b: ByteArray): SosPacket? {
+            if (b.size < 5) return null
+            return SosPacket(u8(b, 0), u8(b, 1), u8(b, 2), u8(b, 3) or (u8(b, 4) shl 8))
+        }
     }
 }
 
@@ -179,8 +198,11 @@ fun landingScore(g: Float): Int = (100f - (g - 1f) * 25f).coerceIn(0f, 100f).toI
  *   u16 speed km/h x10, u16 top speed km/h x10, u16 wheelies, u32 best wheelie ms, u8 reserved
  */
 fun rideInfoBytes(active: Boolean, hasFix: Boolean, elapsedS: Long, distanceM: Long, speedKmh: Float,
-                  topKmh: Float, wheelies: Int, bestMs: Long): ByteArray {
-    val bb = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN)
+                  topKmh: Float, wheelies: Int, bestMs: Long,
+                  batteryPct: Int? = null, rangeKm: Float? = null): ByteArray {
+    // 24 bytes since V3.0: + u8 flags (bit0 battery estimate valid), u8 battery %, u16 range km x10.
+    // Older firmware reads the first 19 and ignores the rest.
+    val bb = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
     bb.put(((if (active) 1 else 0) or (if (hasFix) 2 else 0)).toByte())
     bb.putInt(elapsedS.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
     bb.putInt(distanceM.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
@@ -189,6 +211,10 @@ fun rideInfoBytes(active: Boolean, hasFix: Boolean, elapsedS: Long, distanceM: L
     bb.putShort(wheelies.coerceIn(0, 65535).toShort())
     bb.putInt(bestMs.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
     bb.put(0)
+    val hasBatt = batteryPct != null && rangeKm != null
+    bb.put((if (hasBatt) 1 else 0).toByte())
+    bb.put((batteryPct ?: 0).coerceIn(0, 100).toByte())
+    bb.putShort(((rangeKm ?: 0f) * 10).toInt().coerceIn(0, 65535).toShort())
     return bb.array()
 }
 

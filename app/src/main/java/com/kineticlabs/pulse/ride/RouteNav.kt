@@ -115,7 +115,21 @@ object RouteNav {
             return best
         }
         var hit = nearest(hint - 5, hint + 80)
-        if (hit.second > OFF_ROUTE_M) hit = nearest(0, r.xy.size)  // lost it: look everywhere
+        if (hit.second > OFF_ROUTE_M) {
+            // lost it: look everywhere. A loop passes the same spot at its start and
+            // its end; of the parts you're actually on, take the one nearest to where
+            // you were along the route (else you could "arrive" at the start).
+            val was = r.cum[hint.coerceIn(0, r.cum.size - 1)]
+            var best = nearest(0, r.xy.size)
+            var bestGap = Double.MAX_VALUE
+            for (i in 0 until r.xy.size - 1) {
+                val h = nearest(i, i + 1)
+                if (h.second > OFF_ROUTE_M) continue
+                val gap = kotlin.math.abs(h.third - was)
+                if (gap < bestGap) { bestGap = gap; best = h }
+            }
+            hit = best
+        }
         val (seg, dist, along) = hit
         val left = (r.lengthM - along).coerceAtLeast(0.0)
         val off = dist > OFF_ROUTE_M
@@ -191,7 +205,7 @@ object RouteNav {
             val text = try {
                 c.connectTimeout = 10_000
                 c.readTimeout = 20_000
-                c.setRequestProperty("User-Agent", "KineticPulse-Android/1.5 (route beta)")
+                c.setRequestProperty("User-Agent", "KineticPulse-Android/1.6 (route beta)")
                 val code = c.responseCode
                 if (code !in 200..299) throw RouteException("The router didn't answer (error $code). Try again in a minute.")
                 c.inputStream.bufferedReader().use { it.readText() }

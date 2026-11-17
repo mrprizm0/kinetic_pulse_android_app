@@ -33,26 +33,32 @@ class SpotsException(message: String) : Exception(message)
 object SpotsApi {
     const val BASE = "https://www.kineticlabs.workers.dev"
 
+    // A bad entry from the server is skipped. (Before, one place with a missing
+    // field threw a JSON error nobody caught, and that closed the app.)
     suspend fun places(lat: Double, lon: Double): List<Spot> = withContext(Dispatchers.IO) {
         val o = get("$BASE/api/places?lat=$lat&lon=$lon")
         val arr = o.optJSONArray("places") ?: return@withContext emptyList()
-        (0 until arr.length()).map { i ->
-            val p = arr.getJSONObject(i)
-            Spot(
-                name = p.optString("name"),
-                kind = p.optString("kind"),
-                motorsOk = p.optString("motors") == "yes",
-                lat = p.getDouble("lat"),
-                lon = p.getDouble("lon"),
-                distanceM = p.optInt("distanceM"),
-            )
+        (0 until arr.length()).mapNotNull { i ->
+            try {
+                val p = arr.getJSONObject(i)
+                Spot(
+                    name = p.optString("name").ifBlank { "Unnamed spot" },
+                    kind = p.optString("kind").ifBlank { "spot" },
+                    motorsOk = p.optString("motors") == "yes",
+                    lat = p.getDouble("lat"),
+                    lon = p.getDouble("lon"),
+                    distanceM = p.optInt("distanceM"),
+                )
+            } catch (_: Exception) { null }
         }
     }
 
     suspend fun rideouts(lat: Double, lon: Double): List<Rideout> = withContext(Dispatchers.IO) {
         val o = get("$BASE/api/rideouts?lat=$lat&lon=$lon")
         val arr = o.optJSONArray("rideouts") ?: return@withContext emptyList()
-        (0 until arr.length()).map { i -> parseRideout(arr.getJSONObject(i)) }
+        (0 until arr.length()).mapNotNull { i ->
+            try { parseRideout(arr.getJSONObject(i)) } catch (_: Exception) { null }
+        }
     }
 
     suspend fun postRideout(title: String, note: String, lat: Double, lon: Double, startsAt: Long): Rideout =
@@ -60,7 +66,11 @@ object SpotsApi {
             val body = JSONObject().put("title", title).put("note", note)
                 .put("lat", lat).put("lon", lon).put("startsAt", startsAt)
             val o = request("$BASE/api/rideouts", "POST", body.toString())
-            parseRideout(o.getJSONObject("rideout").put("distanceM", 0))
+            try {
+                parseRideout(o.getJSONObject("rideout").put("distanceM", 0))
+            } catch (_: Exception) {
+                throw SpotsException("Posted, but the server's answer looked wrong. Tap refresh.")
+            }
         }
 
     private fun parseRideout(r: JSONObject) = Rideout(

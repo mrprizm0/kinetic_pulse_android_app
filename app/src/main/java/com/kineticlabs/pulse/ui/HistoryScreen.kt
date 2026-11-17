@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -60,8 +61,8 @@ fun HistoryScreen(vm: PulseViewModel) {
                         putExtra(Intent.EXTRA_TEXT, vm.historyCsv())
                     }
                     context.startActivity(Intent.createChooser(send, "Share wheelies (CSV)"))
-                }) { Text("SHARE", style = LabelStyle.copy(color = TextMain)) }
-                TextButton(onClick = { confirmClear = true }) { Text("CLEAR", style = LabelStyle.copy(color = Red)) }
+                }) { Text("share", fontSize = 16.sp, fontWeight = FontWeight.Light, color = TextMain) }
+                TextButton(onClick = { confirmClear = true }) { Text("clear", fontSize = 16.sp, fontWeight = FontWeight.Light, color = Red) }
             }
         }
 
@@ -91,8 +92,11 @@ fun HistoryScreen(vm: PulseViewModel) {
         Spacer(Modifier.height(16.dp))
 
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(history.asReversed(), key = { it.time }) { r ->
-                HistoryRow(r, fmt.format(Date(r.time)), if (r.isWheelie) r.ms == best else r.ms == bestStoppie)
+            // no item keys: two tricks saved in the same millisecond had the same key, and that crashes a list
+            items(history.asReversed()) { r ->
+                HistoryRow(r, fmt.format(Date(r.time)), if (r.isWheelie) r.ms == best else r.ms == bestStoppie) {
+                    com.kineticlabs.pulse.share.ShareCard.shareTrick(context, r)
+                }
             }
             item { Spacer(Modifier.height(12.dp)) }
         }
@@ -123,7 +127,7 @@ private fun DurationChart(items: List<WheelieRecord>, allBest: Long) {
         drawLine(Line, Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = 1f)
         items.forEachIndexed { i, r ->
             val h = size.height * (r.ms.toFloat() / max).coerceAtLeast(0.03f)
-            drawRoundRect(
+            drawRect(
                 color = when {
                     r.kind == TrickKind.STOPPIE -> Red
                     r.ms == allBest -> Gold
@@ -132,7 +136,6 @@ private fun DurationChart(items: List<WheelieRecord>, allBest: Long) {
                 },
                 topLeft = Offset(i * slot + (slot - w) / 2, size.height - h),
                 size = Size(w, h),
-                cornerRadius = CornerRadius(w / 3, w / 3),
             )
         }
     }
@@ -142,13 +145,13 @@ private fun DurationChart(items: List<WheelieRecord>, allBest: Long) {
 private fun TrickChip(label: String, color: androidx.compose.ui.graphics.Color) {
     Text(
         label, color = androidx.compose.ui.graphics.Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(end = 6.dp).clip(RoundedCornerShape(5.dp)).background(color)
+        modifier = Modifier.padding(end = 6.dp).background(color)
             .padding(horizontal = 5.dp, vertical = 1.dp),
     )
 }
 
 @Composable
-private fun HistoryRow(r: WheelieRecord, date: String, isBest: Boolean) {
+private fun HistoryRow(r: WheelieRecord, date: String, isBest: Boolean, onShare: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().rowDivider().padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -157,7 +160,7 @@ private fun HistoryRow(r: WheelieRecord, date: String, isBest: Boolean) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when (r.kind) {
                     TrickKind.STOPPIE -> TrickChip("STOPPIE", Red)
-                    TrickKind.CIRCLE -> TrickChip(String.format("CIRCLE %.1fx", kotlin.math.abs(r.turns)), Gold)
+                    TrickKind.CIRCLE -> TrickChip(String.format(Locale.US, "CIRCLE %.1fx", kotlin.math.abs(r.turns)), Gold)
                     else -> {}
                 }
                 Text(date, color = Muted, fontSize = 12.sp)
@@ -168,10 +171,16 @@ private fun HistoryRow(r: WheelieRecord, date: String, isBest: Boolean) {
                 color = Muted, fontSize = 12.sp,
             )
         }
-        Text(
-            fmtSecs(r.ms),
-            color = if (isBest) Gold else TextMain,
-            style = numberStyle(26.sp, FontWeight.Light),
-        )
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                fmtSecs(r.ms),
+                color = if (isBest) Gold else TextMain,
+                style = numberStyle(26.sp, FontWeight.Light),
+            )
+            Text(
+                "share", color = Orange, fontSize = 13.sp,
+                modifier = Modifier.clickable(onClick = onShare).padding(top = 2.dp, start = 12.dp),
+            )
+        }
     }
 }
